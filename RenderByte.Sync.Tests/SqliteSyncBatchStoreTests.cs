@@ -282,7 +282,7 @@ public sealed class SqliteSyncBatchStoreTests : IDisposable
     // ─── 10. MovementKey cambia si cambia PK física ────────────────────────────
 
     [Fact]
-    public async Task MovementKey_Cambia_SiCambiaPkFisica()
+    public void MovementKey_Cambia_SiCambiaPkFisica()
     {
         var mov1 = MakeMovement(DateTime.Now, "A", 1, "P", 1);
         var mov2 = mov1 with { Numero = "OTRONUM" };

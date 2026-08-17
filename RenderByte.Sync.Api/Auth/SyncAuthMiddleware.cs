@@ -20,6 +20,12 @@ public class SyncAuthMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
+        if (context.Request.Path.Equals("/health", StringComparison.OrdinalIgnoreCase))
+        {
+            await _next(context);
+            return;
+        }
+
         if (!context.Request.Headers.TryGetValue("Authorization", out var authHeaderValue))
         {
             await ReturnError(context, 401, "UNAUTHORIZED", "API key inválida o ausente.");

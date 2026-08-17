@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>RenderByte.Sync.Persistence</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- SQLite embebido — sin servidor, sin instalación adicional. -->
+    <!-- Microsoft.Data.Sqlite 8.x incluye SQLite 3.43+ con soporte WAL y UPSERT ON CONFLICT. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core contiene MovementCheckpoint (el cursor del agente). -->
+    <ProjectReference Include="..\RenderByte.Sync.Core\RenderByte.Sync.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Permite acceso a miembros internal desde el proyecto de tests (ej. FailAfterInsertN). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>RenderByte.Sync.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

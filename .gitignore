@@ -1,0 +1,31 @@
+# Binaries and build artifacts
+bin/
+obj/
+.vs/
+*.user
+*.suo
+Publish/
+*.zip
+
+# SQLite Databases
+*.db
+*.db-wal
+*.db-shm
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Secrets and local configurations
+secrets.json
+appsettings.Development.json
+
+# Test results and coverage
+TestResults/
+coverage/
+artifacts/
+
+# OS generated files
+.DS_Store
+Thumbs.db

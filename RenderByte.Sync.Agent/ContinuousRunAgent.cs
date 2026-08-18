@@ -81,23 +81,27 @@ public static class ContinuousRunAgent
                 while (!ct.IsCancellationRequested)
                 {
                     var now = GetUtcNow();
+                    var tolerance = TimeSpan.FromMilliseconds(50);
                     
-                    TimeSpan captureDelay = now < nextCaptureAttempt ? nextCaptureAttempt - now : TimeSpan.Zero;
-                    TimeSpan transportDelay = now < nextTransportAttempt ? nextTransportAttempt - now : TimeSpan.Zero;
+                    TimeSpan captureDelay = now + tolerance < nextCaptureAttempt ? nextCaptureAttempt - now : TimeSpan.Zero;
+                    TimeSpan transportDelay = now + tolerance < nextTransportAttempt ? nextTransportAttempt - now : TimeSpan.Zero;
                     
                     TimeSpan minDelay = captureDelay < transportDelay ? captureDelay : transportDelay;
                     
                     if (minDelay > TimeSpan.Zero)
                     {
                         if (alegonErrors == 0 && httpErrors == 0)
-                            Console.WriteLine($"[idle] Sin novedades. Esperando {minDelay.TotalSeconds}s.");
+                        {
+                            var humanSeconds = Math.Max(1, (int)Math.Round(minDelay.TotalSeconds));
+                            Console.WriteLine($"[idle] Sin novedades. Esperando {humanSeconds}s.");
+                        }
                             
                         await DelayTask(minDelay, ct);
                         now = GetUtcNow();
                     }
 
                     // 1. CAPTURE
-                    if (now >= nextCaptureAttempt && !ct.IsCancellationRequested)
+                    if (now + tolerance >= nextCaptureAttempt && !ct.IsCancellationRequested)
                     {
                         try
                         {
@@ -131,7 +135,7 @@ public static class ContinuousRunAgent
                     }
 
                     // 2. SEND PENDING
-                    if (now >= nextTransportAttempt && !ct.IsCancellationRequested)
+                    if (now + tolerance >= nextTransportAttempt && !ct.IsCancellationRequested)
                     {
                         try
                         {

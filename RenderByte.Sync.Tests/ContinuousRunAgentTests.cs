@@ -332,4 +332,52 @@ public class ContinuousRunAgentTests : IDisposable
         var exitCode = await runTask;
         Assert.Equal(0, exitCode);
     }
+
+    [Fact]
+    public async Task Run_Scheduler_DoesNotMicroBusyWaitNearDeadline()
+    {
+        await using (var store = new SqliteSyncBatchStore(_dbPath))
+        {
+            await store.InitializeAsync(_sourceId, 1);
+            await store.PersistBatchAndCheckpointAsync(1, new[] { MakeMovement("INITIAL", 0) }, MovementCheckpoint.Initial(DateTime.Parse("2024-01-01")));
+        }
+
+        var readerMock = new Mock<IAlegonReader>();
+        readerMock.Setup(r => r.GetBranchNumberAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        
+        int callCount = 0;
+        readerMock.Setup(r => r.GetMovementsAfterAsync(It.IsAny<int>(), It.IsAny<MovementCheckpoint>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => 
+            {
+                callCount++;
+                if (callCount == 1) return new List<AlegonMovement> { MakeMovement("001", 1) };
+                return new List<AlegonMovement>();
+            });
+
+        var mockHttp = new MockHttpMessageHandler();
+
+        var delaysRequested = new List<TimeSpan>();
+        var fakeTime = DateTimeOffset.Parse("2024-01-01T12:00:00Z");
+        ContinuousRunAgent.GetUtcNow = () => fakeTime;
+        ContinuousRunAgent.DelayTask = async (t, ct) => 
+        {
+            if (t > TimeSpan.Zero) delaysRequested.Add(t);
+            // Simulate waking up 10ms before the deadline
+            fakeTime += (t - TimeSpan.FromMilliseconds(10));
+            await Task.Yield();
+        };
+
+        using var cts = new CancellationTokenSource();
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp);
+        
+        while (delaysRequested.Count < 3) { await Task.Delay(50); }
+        cts.Cancel();
+        
+        await runTask;
+
+        foreach (var delay in delaysRequested)
+        {
+            Assert.True(delay >= TimeSpan.FromMilliseconds(50), $"Found micro-delay: {delay.TotalMilliseconds}ms");
+        }
+    }
 }

@@ -12,6 +12,7 @@ public static class ContinuousRunAgent
 {
     // Función delegada para esperar (abstracción para tests)
     public static Func<TimeSpan, CancellationToken, Task> DelayTask { get; set; } = Task.Delay;
+    public static Func<DateTimeOffset> GetUtcNow { get; set; } = () => DateTimeOffset.UtcNow;
 
     public static async Task<int> RunAsync(SyncAgentOptions options, IAlegonReader reader, CancellationToken ct, HttpMessageHandler? httpHandler = null)
     {
@@ -71,42 +72,66 @@ public static class ContinuousRunAgent
 
             int alegonErrors = 0;
             int httpErrors = 0;
+            
+            DateTimeOffset nextCaptureAttempt = DateTimeOffset.MinValue;
+            DateTimeOffset nextTransportAttempt = DateTimeOffset.MinValue;
 
             try
             {
                 while (!ct.IsCancellationRequested)
                 {
-                    bool capturedData = false;
-                    bool sentData = false;
+                    var now = GetUtcNow();
+                    
+                    TimeSpan captureDelay = now < nextCaptureAttempt ? nextCaptureAttempt - now : TimeSpan.Zero;
+                    TimeSpan transportDelay = now < nextTransportAttempt ? nextTransportAttempt - now : TimeSpan.Zero;
+                    
+                    TimeSpan minDelay = captureDelay < transportDelay ? captureDelay : transportDelay;
+                    
+                    if (minDelay > TimeSpan.Zero)
+                    {
+                        if (alegonErrors == 0 && httpErrors == 0)
+                            Console.WriteLine($"[idle] Sin novedades. Esperando {minDelay.TotalSeconds}s.");
+                            
+                        await DelayTask(minDelay, ct);
+                        now = GetUtcNow();
+                    }
 
                     // 1. CAPTURE
-                    try
+                    if (now >= nextCaptureAttempt && !ct.IsCancellationRequested)
                     {
-                        var movements = await reader.GetMovementsAfterAsync(branchId, checkpoint, options.ReadBatchSize, ct);
-                        if (movements.Count > 0)
+                        try
                         {
-                            var cpAfter = MovementCheckpoint.From(movements[^1]);
-                            var res = await store.PersistBatchAndCheckpointAsync(branchId, movements, cpAfter, ct);
-                            checkpoint = cpAfter; // Update local memory
+                            var movements = await reader.GetMovementsAfterAsync(branchId, checkpoint, options.ReadBatchSize, ct);
+                            if (movements.Count > 0)
+                            {
+                                var cpAfter = MovementCheckpoint.From(movements[^1]);
+                                var res = await store.PersistBatchAndCheckpointAsync(branchId, movements, cpAfter, ct);
+                                checkpoint = cpAfter; 
 
-                            Console.WriteLine($"[capture] {movements.Count} movimientos encontrados");
-                            Console.WriteLine($"[outbox] inserted={res.Inserted} duplicates={res.DuplicatesSkipped}");
-                            
-                            alegonErrors = 0;
-                            capturedData = true;
+                                Console.WriteLine($"[capture] {movements.Count} movimientos encontrados");
+                                Console.WriteLine($"[outbox] inserted={res.Inserted} duplicates={res.DuplicatesSkipped}");
+                                
+                                alegonErrors = 0;
+                                nextCaptureAttempt = now;
+                            }
+                            else
+                            {
+                                alegonErrors = 0;
+                                nextCaptureAttempt = now + TimeSpan.FromSeconds(options.PollSeconds);
+                            }
                         }
-                    }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex)
-                    {
-                        alegonErrors++;
-                        var wait = GetBackoff(alegonErrors);
-                        Console.Error.WriteLine($"[WARN] SQL Server no disponible: {ex.Message}. Reintento en {wait.TotalSeconds}s.");
-                        await DelayTask(wait, ct);
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            alegonErrors++;
+                            var wait = GetBackoff(alegonErrors);
+                            Console.Error.WriteLine($"[WARN] SQL Server no disponible: {ex.Message}. Próximo intento capture en {wait.TotalSeconds}s.");
+                            nextCaptureAttempt = now + wait;
+                        }
                     }
 
                     // 2. SEND PENDING
-                    if (!ct.IsCancellationRequested)
+                    if (now >= nextTransportAttempt && !ct.IsCancellationRequested)
                     {
                         try
                         {
@@ -118,15 +143,19 @@ public static class ContinuousRunAgent
                                 {
                                     Console.WriteLine($"[sync] sending={sentCount}");
                                     Console.WriteLine($"[sync] marked sent={sentCount}");
-                                    sentData = true;
+                                    nextTransportAttempt = now;
+                                }
+                                else
+                                {
+                                    nextTransportAttempt = now + TimeSpan.FromSeconds(options.PollSeconds);
                                 }
                             }
                             else
                             {
                                 httpErrors++;
                                 var wait = GetBackoff(httpErrors);
-                                Console.Error.WriteLine($"[WARN] Railway HTTP transitorio. Pending preservado. Reintento en {wait.TotalSeconds}s.");
-                                await DelayTask(wait, ct);
+                                Console.Error.WriteLine($"[WARN] Railway HTTP transitorio. Pending preservado. Próximo intento transport en {wait.TotalSeconds}s.");
+                                nextTransportAttempt = now + wait;
                             }
                         }
                         catch (SyncApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized || ex.StatusCode == System.Net.HttpStatusCode.Forbidden || ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
@@ -139,16 +168,9 @@ public static class ContinuousRunAgent
                         {
                             httpErrors++;
                             var wait = GetBackoff(httpErrors);
-                            Console.Error.WriteLine($"[WARN] Error transporte: {ex.Message}. Reintento en {wait.TotalSeconds}s.");
-                            await DelayTask(wait, ct);
+                            Console.Error.WriteLine($"[WARN] Error transporte: {ex.Message}. Próximo intento transport en {wait.TotalSeconds}s.");
+                            nextTransportAttempt = now + wait;
                         }
-                    }
-                    
-                    // 3. IDLE WAIT
-                    if (!capturedData && !sentData && !ct.IsCancellationRequested && alegonErrors == 0 && httpErrors == 0)
-                    {
-                        Console.WriteLine($"[idle] sin novedades. Esperando {options.PollSeconds}s...");
-                        await DelayTask(TimeSpan.FromSeconds(options.PollSeconds), ct);
                     }
                 }
             }

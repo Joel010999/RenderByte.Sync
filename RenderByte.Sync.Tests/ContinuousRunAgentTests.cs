@@ -35,13 +35,19 @@ public class ContinuousRunAgentTests : IDisposable
             PollSeconds: 1
         );
 
-        ContinuousRunAgent.DelayTask = async (t, ct) => await Task.Delay(10, ct); // Override delay with small yield
+        DateTimeOffset fakeTime = DateTimeOffset.Parse("2024-01-01T12:00:00Z");
+        ContinuousRunAgent.DelayTask = async (t, ct) => {
+            fakeTime += t;
+            await Task.Delay(1, ct); 
+        };
+        ContinuousRunAgent.GetUtcNow = () => fakeTime;
     }
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable(SyncDbPath.EnvVar, null);
         ContinuousRunAgent.DelayTask = Task.Delay;
+        ContinuousRunAgent.GetUtcNow = () => DateTimeOffset.UtcNow;
         if (File.Exists(_dbPath))
         {
             try { File.Delete(_dbPath); } catch { }
@@ -237,5 +243,93 @@ public class ContinuousRunAgentTests : IDisposable
             var pending = await store.GetPendingAsync(10);
             Assert.Equal(2, pending.Count); // 1 initial + 1 captured
         }
+    }
+
+    [Fact]
+    public async Task Run_AlegonTemporaryFailure_StillSendsPending()
+    {
+        await using (var store = new SqliteSyncBatchStore(_dbPath))
+        {
+            await store.InitializeAsync(_sourceId, 1);
+            await store.PersistBatchAndCheckpointAsync(1, new[] { MakeMovement("INITIAL", 0) }, MovementCheckpoint.Initial(DateTime.Parse("2024-01-01")));
+        }
+
+        var readerMock = new Mock<IAlegonReader>();
+        readerMock.Setup(r => r.GetBranchNumberAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        readerMock.Setup(r => r.GetMovementsAfterAsync(It.IsAny<int>(), It.IsAny<MovementCheckpoint>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Alegon Caído"));
+
+        bool sent = false;
+        var mockHttp = new MockHttpMessageHandler
+        {
+            Handler = req =>
+            {
+                sent = true;
+                var res = new SyncBatchResponse("123", 1, 1, 0, DateTimeOffset.UtcNow);
+                var opts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(JsonSerializer.Serialize(res, opts), Encoding.UTF8, "application/json")
+                };
+            }
+        };
+
+        using var cts = new CancellationTokenSource();
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp);
+        
+        await Task.Delay(200);
+        cts.Cancel();
+        
+        var exitCode = await runTask;
+        Assert.Equal(0, exitCode);
+        Assert.True(sent);
+
+        await using (var store = new SqliteSyncBatchStore(_dbPath))
+        {
+            await store.OpenExistingInstallationAsync(_sourceId);
+            var pending = await store.GetPendingAsync(10);
+            Assert.Empty(pending); // Transport succeeded despite Alegon failure
+        }
+    }
+
+    [Fact]
+    public async Task Run_BranchMismatch_Stops()
+    {
+        await using (var store = new SqliteSyncBatchStore(_dbPath))
+        {
+            await store.InitializeAsync(_sourceId, 2); // DB expects branch 2
+            await store.PersistBatchAndCheckpointAsync(2, new[] { MakeMovement("INITIAL", 0) }, MovementCheckpoint.Initial(DateTime.Parse("2024-01-01")));
+        }
+
+        var readerMock = new Mock<IAlegonReader>();
+        readerMock.Setup(r => r.GetBranchNumberAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1); // Alegon returns 1
+
+        var exitCode = await ContinuousRunAgent.RunAsync(_options, readerMock.Object, CancellationToken.None);
+        Assert.Equal(2, exitCode); // InvalidOperationException for mismatch
+    }
+
+    [Fact]
+    public async Task Run_CtrlC_CancelsCleanly()
+    {
+        await using (var store = new SqliteSyncBatchStore(_dbPath))
+        {
+            await store.InitializeAsync(_sourceId, 1);
+            await store.PersistBatchAndCheckpointAsync(1, new[] { MakeMovement("INITIAL", 0) }, MovementCheckpoint.Initial(DateTime.Parse("2024-01-01")));
+        }
+
+        var readerMock = new Mock<IAlegonReader>();
+        readerMock.Setup(r => r.GetBranchNumberAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        readerMock.Setup(r => r.GetMovementsAfterAsync(It.IsAny<int>(), It.IsAny<MovementCheckpoint>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<AlegonMovement>());
+
+        var mockHttp = new MockHttpMessageHandler();
+
+        using var cts = new CancellationTokenSource();
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp);
+        
+        cts.Cancel(); // Immediate cancel
+        
+        var exitCode = await runTask;
+        Assert.Equal(0, exitCode);
     }
 }

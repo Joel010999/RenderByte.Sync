@@ -258,7 +258,7 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore
         }
         catch
         {
-            await transaction.RollbackAsync(cancellationToken);
+            await transaction.RollbackAsync(CancellationToken.None);
             throw;
         }
     }

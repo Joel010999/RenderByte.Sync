@@ -33,97 +33,39 @@ public static class OutboxSyncAgent
             return 2;
         }
         
-        var pending = await store.GetPendingAsync(limit, ct);
-        if (pending.Count == 0)
+        var pendingCount = await store.GetPendingCountAsync(ct);
+        if (pendingCount == 0)
         {
             Console.WriteLine("[outbox-sync] No hay mensajes pendientes.");
             return 0;
         }
 
-        Console.WriteLine($"[outbox-sync] {pending.Count} pendientes encontrados.");
-
-        var batchId = Guid.NewGuid().ToString();
-        var branchId = pending[0].BranchId; // Asumimos mismo branch para todos
-        
-        var movements = pending.Select(p => new SyncMovementDto(
-            MovementKey: p.MovementKey,
-            BusinessKey: p.BusinessKey,
-            Depo: (short)p.Depo,
-            TipoMov: p.TipoMovimiento,
-            Fecha: p.Fecha,
-            CodCom: p.CodigoComprobante,
-            PtoVta: p.PuntoVenta,
-            Numero: p.Numero,
-            Proveedor: p.Proveedor,
-            IdArti: p.ArticleId,
-            Bulto: p.Bulto,
-            Local: (short)p.Local,
-            Item: (short)p.Item,
-            Fedepo: p.Fedepo,
-            Oferta: p.Oferta,
-            Cantidad: p.Cantidad,
-            Saldo: p.Saldo,
-            Costo: p.Costo,
-            Precio: p.Precio,
-            ClaveU: p.ClaveU,
-            Piezas: p.Piezas
-        )).ToList();
-
-        var request = new SyncBatchRequest(
-            SourceId: sourceId,
-            BranchId: branchId,
-            BatchId: batchId,
-            SentAt: DateTimeOffset.UtcNow,
-            Mode: "live",
-            Movements: movements
-        );
+        Console.WriteLine($"[outbox-sync] {pendingCount} pendientes encontrados en BD.");
 
         using var client = new HttpSyncClient(apiUrl, apiKey, httpHandler);
-        
+        var transport = new SyncTransportService(store, client, sourceId);
+
         try
         {
-            var response = await client.SendBatchAsync(request, ct);
-            if (response != null && response.Accepted == movements.Count)
+            var (success, sentCount) = await transport.SendPendingAsync(limit, ct);
+            if (success)
             {
-                Console.WriteLine($"[outbox-sync] ACK válido recibido: accepted={response.Accepted}, inserted={response.Inserted}, duplicates={response.Duplicates}");
-                
-                var ids = pending.Select(p => p.Id).ToList();
-                await store.MarkBatchAsSentAsync(ids, batchId, ct);
-                
-                Console.WriteLine($"[outbox-sync] {ids.Count} mensajes marcados como sent.");
+                if (sentCount > 0)
+                    Console.WriteLine($"[outbox-sync] {sentCount} mensajes enviados y marcados como sent.");
+                else
+                    Console.WriteLine($"[outbox-sync] No se enviaron mensajes (ya enviados o fallidos localmente).");
+                return 0;
             }
-            else if (response != null)
+            else
             {
-                Console.WriteLine($"[outbox-sync] ERROR: ACK inválido (accepted {response.Accepted} != count {movements.Count})");
-                await store.MarkBatchAsFailedAsync(pending.Select(p => p.Id), "Invalid ACK count", ct);
+                Console.WriteLine($"[outbox-sync] Ocurrió un error transitorio al enviar.");
                 return 1;
             }
         }
         catch (SyncApiException ex)
         {
-            Console.Error.WriteLine($"[outbox-sync] ERROR API: HTTP {(int)ex.StatusCode} - {ex.ErrorCode}: {ex.Message}");
-            
-            var statusCode = (int)ex.StatusCode;
-            if (statusCode == 400 || statusCode == 401 || statusCode == 403)
-            {
-                // Errores fatales (Bad Request, Auth) -> No reintentar agresivamente, dejar en fail para intervención manual o fix.
-                // Podríamos marcar status = 'fatal' pero por diseño marcamos fail y limitamos max_retries en getPending.
-                await store.MarkBatchAsFailedAsync(pending.Select(p => p.Id), $"FATAL HTTP {statusCode}: {ex.Message}", ct);
-            }
-            else
-            {
-                // Timeout, 429, 500+ -> Fallos transitorios
-                await store.MarkBatchAsFailedAsync(pending.Select(p => p.Id), $"TRANSIENT HTTP {statusCode}: {ex.Message}", ct);
-            }
+            Console.Error.WriteLine($"[outbox-sync] ERROR FATAL HTTP {(int)ex.StatusCode}: {ex.Message}");
             return 1;
         }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[outbox-sync] ERROR RED: {ex.Message}");
-            await store.MarkBatchAsFailedAsync(pending.Select(p => p.Id), $"NETWORK ERROR: {ex.Message}", ct);
-            return 1;
-        }
-
-        return 0;
     }
 }

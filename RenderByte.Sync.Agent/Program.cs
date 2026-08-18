@@ -57,7 +57,7 @@ var command = args.Length > 0 ? args[0].ToLowerInvariant() : string.Empty;
 
 // ── Comandos mutantes: adquirir Single Instance Guard ─────────────────────────
 var mutatingCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    { "outbox-test", "checkpoint-test", "batch-test" };
+    { "outbox-test", "checkpoint-test", "batch-test", "run" };
 
 SyncInstanceGuard? guard = null;
 if (mutatingCommands.Contains(command))
@@ -94,6 +94,9 @@ try
 
         "outbox-show" =>
             await OutboxTestAgent.RunShowAsync(args.Length > 1 ? args[1..] : Array.Empty<string>(), cts.Token),
+
+        "run" =>
+            await ContinuousRunAgent.RunAsync(SyncAgentOptions.FromEnvironment(), reader, cts.Token),
 
         "outbox-sync" =>
             await OutboxSyncAgent.RunAsync(sourceId, args.Length > 1 ? args[1..] : Array.Empty<string>(), cts.Token),

@@ -104,6 +104,9 @@ try
         "idempotency-test" =>
             await IdempotencyTestAgent.RunAsync(sourceId, args.Length > 1 ? args[1..] : Array.Empty<string>(), cts.Token),
 
+        "product-schema-test" =>
+            await ProductSchemaTestAgent.RunAsync(new ProductSchemaReader(connectionString), cts.Token),
+
         // Sin argumento o cualquier otro → health-check (comportamiento original intacto)
         _ =>
             await HealthCheckAgent.RunAsync(reader, cts.Token),

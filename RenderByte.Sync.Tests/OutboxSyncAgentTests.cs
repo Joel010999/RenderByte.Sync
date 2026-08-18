@@ -10,6 +10,7 @@ using RenderByte.Sync.Persistence;
 
 namespace RenderByte.Sync.Tests;
 
+[Collection("Sequential")]
 public class OutboxSyncAgentTests : IDisposable
 {
     private readonly string _dbPath;

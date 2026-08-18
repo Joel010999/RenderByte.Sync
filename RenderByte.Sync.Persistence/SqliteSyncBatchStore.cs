@@ -294,39 +294,58 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            list.Add(new OutboxMessage(
-                Id:                reader.GetInt64(0),
-                SourceId:          reader.GetString(1),
-                BranchId:          reader.GetInt32(2),
-                BusinessKey:       reader.GetString(3),
-                MovementKey:       reader.GetString(4),
-                Fedepo:            reader.GetString(5),
-                ClaveU:            reader.GetString(6),
-                Item:              reader.GetInt32(7),
-                Depo:              reader.GetInt32(8),
-                TipoMovimiento:    reader.GetString(9),
-                Fecha:             reader.GetString(10),
-                CodigoComprobante: reader.GetString(11),
-                PuntoVenta:        reader.GetString(12),
-                Numero:            reader.GetString(13),
-                Proveedor:         reader.GetString(14),
-                ArticleId:         reader.GetString(15),
-                Bulto:             reader.GetString(16),
-                Local:             reader.GetInt32(17),
-                Oferta:            reader.IsDBNull(18) ? null : reader.GetInt32(18),
-                Cantidad:          reader.IsDBNull(19) ? null : reader.GetString(19),
-                Saldo:             reader.IsDBNull(20) ? null : reader.GetString(20),
-                Costo:             reader.IsDBNull(21) ? null : reader.GetString(21),
-                Precio:            reader.IsDBNull(22) ? null : reader.GetString(22),
-                Piezas:            reader.IsDBNull(23) ? null : reader.GetString(23),
-                Status:            reader.GetString(24),
-                RetryCount:        reader.GetInt32(25),
-                CreatedAt:         reader.GetString(26),
-                SentAt:            reader.IsDBNull(27) ? null : reader.GetString(27),
-                LastError:         reader.IsDBNull(28) ? null : reader.GetString(28)));
+            list.Add(MapOutboxMessage(reader));
         }
 
         return list;
+    }
+
+    private static OutboxMessage MapOutboxMessage(SqliteDataReader reader) => new OutboxMessage(
+        Id:                reader.GetInt64(0),
+        SourceId:          reader.GetString(1),
+        BranchId:          reader.GetInt32(2),
+        BusinessKey:       reader.GetString(3),
+        MovementKey:       reader.GetString(4),
+        Fedepo:            reader.GetString(5),
+        ClaveU:            reader.GetString(6),
+        Item:              reader.GetInt32(7),
+        Depo:              reader.GetInt32(8),
+        TipoMovimiento:    reader.GetString(9),
+        Fecha:             reader.GetString(10),
+        CodigoComprobante: reader.GetString(11),
+        PuntoVenta:        reader.GetString(12),
+        Numero:            reader.GetString(13),
+        Proveedor:         reader.GetString(14),
+        ArticleId:         reader.GetString(15),
+        Bulto:             reader.GetString(16),
+        Local:             reader.GetInt32(17),
+        Oferta:            reader.IsDBNull(18) ? null : reader.GetInt32(18),
+        Cantidad:          reader.IsDBNull(19) ? null : reader.GetString(19),
+        Saldo:             reader.IsDBNull(20) ? null : reader.GetString(20),
+        Costo:             reader.IsDBNull(21) ? null : reader.GetString(21),
+        Precio:            reader.IsDBNull(22) ? null : reader.GetString(22),
+        Piezas:            reader.IsDBNull(23) ? null : reader.GetString(23),
+        Status:            reader.GetString(24),
+        RetryCount:        reader.GetInt32(25),
+        CreatedAt:         reader.GetString(26),
+        SentAt:            reader.IsDBNull(27) ? null : reader.GetString(27),
+        LastError:         reader.IsDBNull(28) ? null : reader.GetString(28));
+
+    public async Task<OutboxMessage?> GetMessageByIdAsync(long id, CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = "SELECT * FROM sync_outbox WHERE id = @id LIMIT 1;";
+        cmd.Parameters.AddWithValue("@id", id);
+
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        if (await reader.ReadAsync(cancellationToken))
+        {
+            return MapOutboxMessage(reader);
+        }
+
+        return null;
     }
 
     public async Task MarkBatchAsSentAsync(IEnumerable<long> messageIds, string batchId, CancellationToken cancellationToken = default)

@@ -98,6 +98,9 @@ try
         "outbox-sync" =>
             await OutboxSyncAgent.RunAsync(sourceId, args.Length > 1 ? args[1..] : Array.Empty<string>(), cts.Token),
 
+        "idempotency-test" =>
+            await IdempotencyTestAgent.RunAsync(sourceId, args.Length > 1 ? args[1..] : Array.Empty<string>(), cts.Token),
+
         // Sin argumento o cualquier otro → health-check (comportamiento original intacto)
         _ =>
             await HealthCheckAgent.RunAsync(reader, cts.Token),

@@ -95,4 +95,38 @@ public sealed record OutboxMessage(
             LastError:         null
         );
     }
+
+    /// <summary>
+    /// Reconstruye el movimiento original de Alegon a partir del estado aplanado de SQLite.
+    /// Utilizado para simulaciones idempotentes o visualización de diagnóstico.
+    /// </summary>
+    public AlegonMovement ToAlegonMovement()
+    {
+        var alegonFormat = MovementCanonicalizer.AlegonDateFormat;
+        
+        DateTime fecha = DateTime.ParseExact(Fecha, alegonFormat, CultureInfo.InvariantCulture);
+        DateTime? fedepo = string.IsNullOrEmpty(Fedepo) ? null : DateTime.ParseExact(Fedepo, alegonFormat, CultureInfo.InvariantCulture);
+
+        return new AlegonMovement(
+            Depo: Depo,
+            TipoMovimiento: TipoMovimiento,
+            Fecha: fecha,
+            CodigoComprobante: CodigoComprobante,
+            PuntoVenta: PuntoVenta,
+            Numero: Numero,
+            Proveedor: Proveedor,
+            ArticleId: ArticleId,
+            Bulto: Bulto,
+            Local: Local,
+            Item: Item,
+            FechaDeposito: fedepo,
+            Oferta: Oferta,
+            Cantidad: string.IsNullOrEmpty(Cantidad) ? null : decimal.Parse(Cantidad, CultureInfo.InvariantCulture),
+            Saldo: string.IsNullOrEmpty(Saldo) ? null : decimal.Parse(Saldo, CultureInfo.InvariantCulture),
+            Costo: string.IsNullOrEmpty(Costo) ? null : decimal.Parse(Costo, CultureInfo.InvariantCulture),
+            Precio: string.IsNullOrEmpty(Precio) ? null : decimal.Parse(Precio, CultureInfo.InvariantCulture),
+            ClaveU: ClaveU,
+            Piezas: string.IsNullOrEmpty(Piezas) ? null : decimal.Parse(Piezas, CultureInfo.InvariantCulture)
+        );
+    }
 }

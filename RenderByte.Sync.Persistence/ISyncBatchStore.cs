@@ -63,6 +63,12 @@ public interface ISyncBatchStore : IAsyncDisposable
     Task<IReadOnlyList<OutboxMessage>> GetPendingAsync(int limit, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Retorna un mensaje específico del Outbox por su ID local, independientemente de su estado.
+    /// Retorna null si no existe.
+    /// </summary>
+    Task<OutboxMessage?> GetMessageByIdAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Marca un conjunto de mensajes como enviados con un batchId específico.
     /// </summary>
     Task MarkBatchAsSentAsync(IEnumerable<long> messageIds, string batchId, CancellationToken cancellationToken = default);

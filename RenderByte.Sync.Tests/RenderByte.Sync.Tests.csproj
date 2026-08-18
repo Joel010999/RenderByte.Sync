@@ -21,6 +21,8 @@
   <ItemGroup>
     <ProjectReference Include="..\RenderByte.Sync.Core\RenderByte.Sync.Core.csproj" />
     <ProjectReference Include="..\RenderByte.Sync.Persistence\RenderByte.Sync.Persistence.csproj" />
+    <ProjectReference Include="..\RenderByte.Sync.Agent\RenderByte.Sync.Agent.csproj" />
+    <ProjectReference Include="..\RenderByte.Sync.Contracts\RenderByte.Sync.Contracts.csproj" />
   </ItemGroup>
 
 </Project>

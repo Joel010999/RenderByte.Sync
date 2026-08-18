@@ -23,6 +23,14 @@ public interface ISyncBatchStore : IAsyncDisposable
     Task InitializeAsync(string sourceId, int branchId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Abre una base de datos local existente y valida su metadata de instalación.
+    /// Útil para operaciones de solo lectura/sincronización (como outbox-sync) 
+    /// que no deben crear una nueva DB ni dependen de Alegon para conocer el branch_id.
+    /// </summary>
+    /// <param name="sourceId">Identificador único de esta instalación de RenderByte Sync.</param>
+    Task OpenExistingInstallationAsync(string sourceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retorna el checkpoint persistido, o nulo si no existe (primera ejecución).
     /// </summary>
     Task<StoredCheckpointData?> GetCheckpointAsync(CancellationToken cancellationToken = default);

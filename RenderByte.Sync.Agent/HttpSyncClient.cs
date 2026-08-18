@@ -11,12 +11,12 @@ public sealed class HttpSyncClient : IDisposable
     private readonly string _apiUrl;
     private readonly string _apiKey;
 
-    public HttpSyncClient(string apiUrl, string apiKey)
+    public HttpSyncClient(string apiUrl, string apiKey, HttpMessageHandler? handler = null)
     {
         _apiUrl = apiUrl.TrimEnd('/');
         _apiKey = apiKey;
         
-        _httpClient = new HttpClient();
+        _httpClient = handler != null ? new HttpClient(handler) : new HttpClient();
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
         _httpClient.Timeout = TimeSpan.FromSeconds(60);
     }

@@ -1,3 +1,4 @@
+using System.Net.Http;
 using RenderByte.Sync.Contracts;
 using RenderByte.Sync.Persistence;
 
@@ -5,7 +6,7 @@ namespace RenderByte.Sync.Agent;
 
 public static class OutboxSyncAgent
 {
-    public static async Task<int> RunAsync(string sourceId, string[] args, CancellationToken ct)
+    public static async Task<int> RunAsync(string sourceId, string[] args, CancellationToken ct, HttpMessageHandler? httpHandler = null)
     {
         var limit = args.Length > 0 && int.TryParse(args[0], out var l) ? l : 200;
 
@@ -22,17 +23,15 @@ public static class OutboxSyncAgent
 
         var dbPath = SyncDbPath.Resolve();
         await using var store = new SqliteSyncBatchStore(dbPath);
-        
-        // No necesitamos inicializar con branchId porque solo vamos a leer/actualizar
-        // Pero SqliteSyncBatchStore.InitializeAsync requiere branchId.
-        // Haremos un hacky inicialize con branch 0 o podemos cambiar InitializeAsync para ser tolerante.
-        // O mejor: leer el branch_id del primer outbox message o pasarlo si es estricto.
-        // Como M5.1 requiere branch_id para verificar inconsistencia, vamos a pasarlo o ignorar.
-        
-        // Mejor: SqliteSyncBatchStore.EnsureInitialized se llama solo si usamos métodos que lo requieren.
-        // Sin embargo, getPending no lo requiere per se pero lo llama.
-        // Cambiaremos SqliteSyncBatchStore para poder inicializar sin branch_id estricto.
-        // Por ahora, asumimos que ya está inicializada por un checkpoint-test previo.
+        try
+        {
+            await store.OpenExistingInstallationAsync(sourceId, ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            Console.Error.WriteLine($"[ERROR] {ex.Message}");
+            return 2;
+        }
         
         var pending = await store.GetPendingAsync(limit, ct);
         if (pending.Count == 0)
@@ -79,7 +78,7 @@ public static class OutboxSyncAgent
             Movements: movements
         );
 
-        using var client = new HttpSyncClient(apiUrl, apiKey);
+        using var client = new HttpSyncClient(apiUrl, apiKey, httpHandler);
         
         try
         {

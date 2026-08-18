@@ -152,6 +152,57 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore
         await ValidateBranchAsync(branchId, cancellationToken);
     }
 
+    public async Task OpenExistingInstallationAsync(string sourceId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceId);
+
+        if (_connection is not null)
+            throw new InvalidOperationException("InitializeAsync u OpenExistingInstallationAsync ya fue llamado.");
+
+        if (!System.IO.File.Exists(_dbPath))
+        {
+            throw new InvalidOperationException(
+                $"La base de datos '{_dbPath}' no existe. La instalación nunca fue provisionada. " +
+                "Ejecute un ciclo completo (ej. checkpoint-test o outbox-test) antes de iniciar outbox-sync.");
+        }
+
+        _sourceId = sourceId;
+        _connection = new SqliteConnection($"Data Source={_dbPath}");
+
+        try
+        {
+            await _connection.OpenAsync(cancellationToken);
+            await RunNonQueryAsync("PRAGMA journal_mode = WAL;", cancellationToken);
+            await RunNonQueryAsync("PRAGMA foreign_keys = ON;", cancellationToken);
+            await MigrateSchemaAsync(cancellationToken);
+        }
+        catch (SqliteException ex)
+        {
+            throw new InvalidOperationException(
+                $"[ERROR_SQLITE] No se pudo abrir la base de datos local en '{_dbPath}'. " +
+                $"Detalle: {ex.Message}", ex);
+        }
+
+        using var selectCmd = _connection.CreateCommand();
+        selectCmd.CommandText = "SELECT source_id FROM sync_installation WHERE id = 1;";
+        var result = await selectCmd.ExecuteScalarAsync(cancellationToken);
+
+        if (result is null or DBNull)
+        {
+            throw new InvalidOperationException(
+                "La base de datos local existe pero no contiene metadata de instalación (source_id).");
+        }
+
+        var storedSource = (string)result;
+        if (!string.Equals(storedSource, sourceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"[SOURCE MISMATCH] sync.db fue creado para source_id='{storedSource}', " +
+                $"pero el agente arrancó con source_id='{sourceId}'. " +
+                $"No mezclar instalaciones. Verifique la variable RENDERBYTE_SYNC_SOURCE_ID.");
+        }
+    }
+
     public async Task<StoredCheckpointData?> GetCheckpointAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfNotInitialized();

@@ -15,9 +15,10 @@ namespace RenderByte.Sync.Persistence;
 ///   <item>v0 → v1: crea <c>sync_checkpoint</c>.</item>
 ///   <item>v1 → v2: crea <c>sync_outbox</c>.</item>
 ///   <item>v2 → v3: crea <c>sync_installation</c> (source_id) + unifica formato de fecha en checkpoint.</item>
+///   <item>v3 → v4: crea <c>product_state</c> y <c>product_outbox</c> para M8.1.</item>
 /// </list>
 /// </remarks>
-public sealed class SqliteSyncBatchStore : ISyncBatchStore
+public sealed class SqliteSyncBatchStore : ISyncBatchStore, IProductStore
 {
     // ─── Schema v1 ───────────────────────────────────────────────────────────────
 
@@ -87,6 +88,40 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore
         UPDATE sync_checkpoint
            SET fedepo = substr(fedepo, 1, 10) || 'T' || substr(fedepo, 12) || '0000'
          WHERE fedepo NOT LIKE '%T%';
+        """;
+
+    // ─── Schema v4 (Products M8.1) ────────────────────────────────────────────────
+
+    private const string SchemaSqlV4_Products = """
+        CREATE TABLE IF NOT EXISTS product_state (
+            source_id       TEXT    NOT NULL,
+            article_id      INTEGER NOT NULL,
+            business_key    TEXT    NOT NULL,
+            content_hash    TEXT    NOT NULL,
+            last_seen_at    TEXT    NOT NULL,
+            last_changed_at TEXT    NOT NULL,
+            is_present      INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (source_id, article_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS product_outbox (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id       TEXT    NOT NULL,
+            branch_id       INTEGER NOT NULL,
+            business_key    TEXT    NOT NULL,
+            article_id      INTEGER NOT NULL,
+            content_hash    TEXT    NOT NULL,
+            payload         TEXT    NOT NULL,
+            status          TEXT    NOT NULL DEFAULT 'pending',
+            retry_count     INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT    NOT NULL,
+            sent_at         TEXT,
+            last_error      TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS uidx_product_outbox_pending
+        ON product_outbox (source_id, article_id, content_hash)
+        WHERE status = 'pending';
         """;
 
     // ─── Formatos de fecha ────────────────────────────────────────────────────────
@@ -442,6 +477,13 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore
                 throw;
             }
         }
+
+        if (version < 4)
+        {
+            await RunNonQueryAsync(SchemaSqlV4_Products, ct);
+            await RunNonQueryAsync("PRAGMA user_version = 4;", ct);
+            version = 4;
+        }
     }
 
     private async Task RegisterOrValidateSourceAsync(string sourceId, CancellationToken ct)
@@ -656,4 +698,200 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore
     private static DateTime ParseAlegonDate(string value) =>
         DateTime.ParseExact(value, ReadDateFormats,
             CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+
+    // ─── IProductStore ─────────────────────────────────────────────────────────────
+
+    public async Task<IReadOnlyDictionary<string, ProductState>> GetStatesAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = "SELECT business_key, article_id, content_hash, is_present FROM product_state WHERE source_id = @sourceId;";
+        cmd.Parameters.AddWithValue("@sourceId", _sourceId);
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        var result = new Dictionary<string, ProductState>();
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var key = reader.GetString(0);
+            result[key] = new ProductState(
+                BusinessKey: key,
+                ArticleId: reader.GetInt32(1),
+                ContentHash: reader.GetString(2),
+                IsPresent: reader.GetInt32(3) != 0);
+        }
+
+        return result;
+    }
+
+    public async Task UpsertStateAndOutboxAsync(
+        string sourceId,
+        int branchId,
+        AlegonProductMaster product,
+        string businessKey,
+        string contentHash,
+        string payloadJson,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        await using var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
+        var nowStr = DateTime.UtcNow.ToString(MovementCanonicalizer.UtcTimestampFormat, CultureInfo.InvariantCulture);
+
+        try
+        {
+            // 1. Upsert State
+            using var cmdState = _connection.CreateCommand();
+            cmdState.Transaction = (SqliteTransaction)transaction;
+            cmdState.CommandText = """
+                INSERT INTO product_state (source_id, article_id, business_key, content_hash, last_seen_at, last_changed_at, is_present)
+                VALUES (@sourceId, @articleId, @businessKey, @contentHash, @now, @now, 1)
+                ON CONFLICT(source_id, article_id) DO UPDATE SET
+                    content_hash = excluded.content_hash,
+                    last_seen_at = excluded.last_seen_at,
+                    last_changed_at = excluded.last_changed_at,
+                    is_present = 1;
+                """;
+            cmdState.Parameters.AddWithValue("@sourceId", sourceId);
+            cmdState.Parameters.AddWithValue("@articleId", product.ArticleId);
+            cmdState.Parameters.AddWithValue("@businessKey", businessKey);
+            cmdState.Parameters.AddWithValue("@contentHash", contentHash);
+            cmdState.Parameters.AddWithValue("@now", nowStr);
+            await cmdState.ExecuteNonQueryAsync(cancellationToken);
+
+            // 2. Insert Outbox
+            using var cmdOutbox = _connection.CreateCommand();
+            cmdOutbox.Transaction = (SqliteTransaction)transaction;
+            cmdOutbox.CommandText = """
+                INSERT INTO product_outbox (source_id, branch_id, business_key, article_id, content_hash, payload, status, retry_count, created_at)
+                VALUES (@sourceId, @branchId, @businessKey, @articleId, @contentHash, @payload, 'pending', 0, @now)
+                ON CONFLICT(source_id, article_id, content_hash) WHERE status = 'pending' DO NOTHING;
+                """;
+            cmdOutbox.Parameters.AddWithValue("@sourceId", sourceId);
+            cmdOutbox.Parameters.AddWithValue("@branchId", branchId);
+            cmdOutbox.Parameters.AddWithValue("@businessKey", businessKey);
+            cmdOutbox.Parameters.AddWithValue("@articleId", product.ArticleId);
+            cmdOutbox.Parameters.AddWithValue("@contentHash", contentHash);
+            cmdOutbox.Parameters.AddWithValue("@payload", payloadJson);
+            cmdOutbox.Parameters.AddWithValue("@now", nowStr);
+            await cmdOutbox.ExecuteNonQueryAsync(cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task MarkMissingAndCreateTombstoneAsync(
+        string sourceId,
+        int branchId,
+        string businessKey,
+        int articleId,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        await using var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
+        var nowStr = DateTime.UtcNow.ToString(MovementCanonicalizer.UtcTimestampFormat, CultureInfo.InvariantCulture);
+
+        try
+        {
+            // 1. Update State
+            using var cmdState = _connection.CreateCommand();
+            cmdState.Transaction = (SqliteTransaction)transaction;
+            cmdState.CommandText = "UPDATE product_state SET is_present = 0, last_changed_at = @now, last_seen_at = @now WHERE business_key = @businessKey;";
+            cmdState.Parameters.AddWithValue("@businessKey", businessKey);
+            cmdState.Parameters.AddWithValue("@now", nowStr);
+            var affected = await cmdState.ExecuteNonQueryAsync(cancellationToken);
+
+            if (affected > 0)
+            {
+                // 2. Insert Outbox (Tombstone)
+                using var cmdOutbox = _connection.CreateCommand();
+                cmdOutbox.Transaction = (SqliteTransaction)transaction;
+                cmdOutbox.CommandText = """
+                    INSERT INTO product_outbox (source_id, branch_id, business_key, article_id, content_hash, payload, status, retry_count, created_at)
+                    VALUES (@sourceId, @branchId, @businessKey, @articleId, 'TOMBSTONE', '{}', 'pending', 0, @now)
+                    ON CONFLICT(source_id, article_id, content_hash) WHERE status = 'pending' DO NOTHING;
+                    """;
+                cmdOutbox.Parameters.AddWithValue("@sourceId", sourceId);
+                cmdOutbox.Parameters.AddWithValue("@branchId", branchId);
+                cmdOutbox.Parameters.AddWithValue("@businessKey", businessKey);
+                cmdOutbox.Parameters.AddWithValue("@articleId", articleId);
+                cmdOutbox.Parameters.AddWithValue("@now", nowStr);
+                await cmdOutbox.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<ProductOutboxMessage>> GetPendingOutboxAsync(int limit, CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, business_key, article_id, content_hash, payload, status, retry_count
+            FROM product_outbox
+            WHERE status = 'pending' AND source_id = @sourceId
+            ORDER BY id ASC
+            LIMIT @limit;
+            """;
+        cmd.Parameters.AddWithValue("@sourceId", _sourceId);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        var result = new List<ProductOutboxMessage>();
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new ProductOutboxMessage(
+                Id: reader.GetInt64(0),
+                BusinessKey: reader.GetString(1),
+                ArticleId: reader.GetInt32(2),
+                ContentHash: reader.GetString(3),
+                Payload: reader.GetString(4),
+                Status: reader.GetString(5),
+                RetryCount: reader.GetInt32(6)
+            ));
+        }
+
+        return result;
+    }
+
+    public async Task MarkOutboxSentAsync(long id, CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+        var nowStr = DateTime.UtcNow.ToString(MovementCanonicalizer.UtcTimestampFormat, CultureInfo.InvariantCulture);
+
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = "UPDATE product_outbox SET status = 'sent', sent_at = @now, last_error = NULL WHERE id = @id;";
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.AddWithValue("@now", nowStr);
+
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task MarkOutboxErrorAsync(long id, string error, CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = "UPDATE product_outbox SET retry_count = retry_count + 1, last_error = @error WHERE id = @id;";
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.AddWithValue("@error", error);
+
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
 }
+

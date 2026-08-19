@@ -47,6 +47,32 @@ public sealed class HttpSyncClient : IDisposable
         throw new SyncApiException(response.StatusCode, exErrorCode, exMsg);
     }
 
+    public async Task<ProductSyncResponse?> SendProductsBatchAsync(ProductSyncRequest request, CancellationToken ct)
+    {
+        var url = $"{_apiUrl}/v1/sync/products";
+
+        var response = await _httpClient.PostAsJsonAsync(url, request, ct);
+
+        if (response.IsSuccessStatusCode)
+        {
+            var result = await response.Content.ReadFromJsonAsync<ProductSyncResponse>(cancellationToken: ct);
+            return result;
+        }
+
+        var errorBody = await response.Content.ReadAsStringAsync(ct);
+        SyncErrorResponse? errorData = null;
+        try 
+        {
+            errorData = JsonSerializer.Deserialize<SyncErrorResponse>(errorBody);
+        }
+        catch { }
+
+        var exMsg = errorData?.Message ?? errorBody;
+        var exErrorCode = errorData?.Error ?? response.StatusCode.ToString();
+        
+        throw new SyncApiException(response.StatusCode, exErrorCode, exMsg);
+    }
+
     public void Dispose()
     {
         _httpClient.Dispose();

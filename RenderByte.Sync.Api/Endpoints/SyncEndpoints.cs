@@ -145,5 +145,134 @@ public static class SyncEndpoints
                 return Results.Problem("Error interno guardando los movimientos.", statusCode: 500);
             }
         });
+
+        app.MapPost("/v1/sync/products", async (
+            HttpContext context,
+            ProductSyncRequest? request,
+            IConfiguration config) =>
+        {
+            if (request == null || request.Products == null || !request.Products.Any())
+            {
+                return Results.BadRequest(new SyncErrorResponse("INVALID_PAYLOAD", "Payload vacío o inválido.", request?.BatchId, null));
+            }
+
+            if (request.Products.Count > 1000)
+            {
+                return Results.BadRequest(new SyncErrorResponse("INVALID_PAYLOAD", "El batch excede el límite de 1000 productos.", request.BatchId, null));
+            }
+
+            var authContext = context.Items["SyncAuthContext"] as SyncAuthContext;
+            if (authContext == null || authContext.SourceId != request.SourceId)
+            {
+                return Results.Json(new SyncErrorResponse("SOURCE_MISMATCH", "El source_id del request no corresponde a las credenciales presentadas.", request.BatchId, null), statusCode: 403);
+            }
+
+            var connectionString = config.GetConnectionString("DefaultConnection");
+
+            var mandatoryErrors = new List<string>();
+            foreach (var prod in request.Products)
+            {
+                if (string.IsNullOrWhiteSpace(prod.BusinessKey) || string.IsNullOrWhiteSpace(prod.ContentHash) || prod.ArticleId <= 0)
+                {
+                    mandatoryErrors.Add($"Producto inválido en batch (ArticleId: {prod.ArticleId}).");
+                }
+            }
+
+            if (mandatoryErrors.Any())
+            {
+                return Results.BadRequest(new SyncErrorResponse("INVALID_PAYLOAD", "Errores de validación en el batch.", request.BatchId, null));
+            }
+
+            await using var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+
+            int inserted = 0;
+            int updated = 0;
+            int unchanged = 0;
+
+            try
+            {
+                var selectSql = "SELECT content_hash FROM products_raw WHERE source_id = @SourceId AND article_id = @ArticleId;";
+                var insertSql = @"
+                    INSERT INTO products_raw (
+                        organization_id, source_id, branch_id, article_id, business_key, content_hash, payload, is_present
+                    ) VALUES (
+                        @OrganizationId, @SourceId, @BranchId, @ArticleId, @BusinessKey, @ContentHash, @Payload::JSONB, @IsPresent
+                    );";
+                var updateSql = @"
+                    UPDATE products_raw SET
+                        branch_id = @BranchId,
+                        business_key = @BusinessKey,
+                        content_hash = @ContentHash,
+                        payload = @Payload::JSONB,
+                        is_present = @IsPresent,
+                        source_seen_at = NOW()
+                    WHERE source_id = @SourceId AND article_id = @ArticleId;";
+
+                foreach (var prod in request.Products)
+                {
+                    bool isTombstone = prod.ContentHash == "TOMBSTONE";
+
+                    var existingHash = await connection.ExecuteScalarAsync<string>(selectSql, new
+                    {
+                        SourceId = authContext.SourceId,
+                        ArticleId = prod.ArticleId
+                    }, transaction);
+
+                    if (existingHash == null)
+                    {
+                        await connection.ExecuteAsync(insertSql, new
+                        {
+                            OrganizationId = authContext.OrganizationId,
+                            SourceId = authContext.SourceId,
+                            BranchId = request.BranchId,
+                            ArticleId = prod.ArticleId,
+                            BusinessKey = prod.BusinessKey,
+                            ContentHash = prod.ContentHash,
+                            Payload = isTombstone ? "{}" : prod.Payload,
+                            IsPresent = !isTombstone
+                        }, transaction);
+                        inserted++;
+                    }
+                    else if (existingHash != prod.ContentHash)
+                    {
+                        await connection.ExecuteAsync(updateSql, new
+                        {
+                            SourceId = authContext.SourceId,
+                            ArticleId = prod.ArticleId,
+                            BranchId = request.BranchId,
+                            BusinessKey = prod.BusinessKey,
+                            ContentHash = prod.ContentHash,
+                            Payload = isTombstone ? "{}" : prod.Payload,
+                            IsPresent = !isTombstone
+                        }, transaction);
+                        updated++;
+                    }
+                    else
+                    {
+                        unchanged++;
+                    }
+                }
+
+                await transaction.CommitAsync();
+
+                var response = new ProductSyncResponse(
+                    request.BatchId,
+                    request.Products.Count,
+                    inserted,
+                    updated,
+                    unchanged,
+                    DateTimeOffset.UtcNow
+                );
+
+                return Results.Ok(response);
+            }
+            catch (Exception)
+            {
+                await transaction.RollbackAsync();
+                return Results.Problem("Error interno guardando los productos.", statusCode: 500);
+            }
+        });
     }
 }

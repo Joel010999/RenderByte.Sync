@@ -8,37 +8,37 @@ namespace RenderByte.Sync.Core.Alegon.Models;
 /// </summary>
 public sealed record AlegonProductMaster(
     int      ArticleId,         // articulo (int)
-    string?  Marca,             // marca
-    string?  Descripcion,       // descri
-    string?  UnidadMedida,      // unimed
-    string?  Bulto,             // bulto
-    string?  TipoImpuesto,      // timpu
-    string?  Clasificacion,     // clasif
-    string?  Proveedor,         // provee
-    string?  ArticuloProveedor, // artprov
-    decimal? CostoImpositivo,   // cossimp
-    decimal? CostoVenta,        // cossvta
+    string?  Marca,             // marca (char)
+    string?  Descripcion,       // descri (char)
+    string?  UnidadMedida,      // unimed (char)
+    string?  Bulto,             // bulto (char)
+    string?  TipoImpuesto,      // timpu (char)
+    string?  Clasificacion,     // clasif (char)
+    string?  Proveedor,         // provee (char)
+    string?  ArticuloProveedor, // artprov (char)
+    decimal? CostoImpositivo,   // cossimp (numeric)
+    decimal? CostoVenta,        // cossvta (numeric)
     DateTime? FechaActualizacion, // factu (DateTime Unspecified)
-    decimal? StockOptimo,       // stopti
-    decimal? PuntoPedido,       // ptoped
-    string?  Ubicacion,         // ubicacion
-    bool?    HabilitadoCompra,  // habcpa
-    bool?    HabilitadoVenta,   // habvta
-    string?  Cotizacion,        // cotiza
-    string?  CuentaCompra,      // cuencpa
-    string?  CuentaVenta,       // cuenvta
-    decimal? DescuentoMaximo,   // dcto_max
-    int?     IdSubRubro,        // idsbart
-    int?     IdProducto,        // idprod
-    bool?    Estado,            // estado
-    string?  EsquemaCalculo,    // esqucalc
-    string?  BultoEnvase,       // benvase
-    int?     NumeroAsocEnvase,  // nasocenv
-    string?  BultoPesable,      // bpesable
-    string?  RutaFoto,          // cfoto
-    decimal? Comision,          // comision
-    decimal? DiasVencimiento,   // ndiasvct
-    decimal? MinimoMayorista,   // nMinMay
-    DateTime? VigenciaMayoristaDesde, // dVigMayd
-    DateTime? VigenciaMayoristaHasta  // dVigMayh
+    decimal? StockOptimo,       // stopti (numeric)
+    decimal? PuntoPedido,       // ptoped (numeric)
+    string?  Ubicacion,         // ubicacion (char)
+    bool?    HabilitadoCompra,  // habcpa (bit)
+    bool?    HabilitadoVenta,   // habvta (bit)
+    string?  Cotizacion,        // cotiza (char)
+    int?     CuentaCompra,      // cuencpa (int)
+    int?     CuentaVenta,       // cuenvta (int)
+    decimal? DescuentoMaximo,   // dcto_max (numeric)
+    int?     IdSubRubro,        // idsbart (int)
+    int?     IdProducto,        // idprod (int)
+    byte?    Estado,            // estado (tinyint)
+    string?  EsquemaCalculo,    // esqucalc (char)
+    bool?    BultoEnvase,       // benvase (bit)
+    decimal? NumeroAsocEnvase,  // nasocenv (numeric)
+    bool?    BultoPesable,      // bpesable (bit)
+    string?  RutaFoto,          // cfoto (varchar)
+    decimal? Comision,          // comision (numeric)
+    decimal? DiasVencimiento,   // ndiasvct (numeric)
+    decimal? MinimoMayorista,   // nMinMay (numeric)
+    DateTime? VigenciaMayoristaDesde, // dVigMayd (datetime)
+    DateTime? VigenciaMayoristaHasta  // dVigMayh (datetime)
 );

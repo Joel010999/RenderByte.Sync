@@ -50,6 +50,9 @@ public static class ProductCanonicalizer
         string FormatInt(int? i) =>
             i.HasValue ? i.Value.ToString(CultureInfo.InvariantCulture) : NullLiteral;
 
+        string FormatByte(byte? b) =>
+            b.HasValue ? b.Value.ToString(CultureInfo.InvariantCulture) : NullLiteral;
+
         string FormatString(string? s) => s ?? NullLiteral;
 
         ReadOnlySpan<string> fields =
@@ -72,16 +75,16 @@ public static class ProductCanonicalizer
             FormatBool(product.HabilitadoCompra),
             FormatBool(product.HabilitadoVenta),
             FormatString(product.Cotizacion),
-            FormatString(product.CuentaCompra),
-            FormatString(product.CuentaVenta),
+            FormatInt(product.CuentaCompra),
+            FormatInt(product.CuentaVenta),
             FormatDecimal(product.DescuentoMaximo),
             FormatInt(product.IdSubRubro),
             FormatInt(product.IdProducto),
-            FormatBool(product.Estado),
+            FormatByte(product.Estado),
             FormatString(product.EsquemaCalculo),
-            FormatString(product.BultoEnvase),
-            FormatInt(product.NumeroAsocEnvase),
-            FormatString(product.BultoPesable),
+            FormatBool(product.BultoEnvase),
+            FormatDecimal(product.NumeroAsocEnvase),
+            FormatBool(product.BultoPesable),
             FormatString(product.RutaFoto),
             FormatDecimal(product.Comision),
             FormatDecimal(product.DiasVencimiento),

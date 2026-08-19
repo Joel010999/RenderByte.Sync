@@ -306,7 +306,7 @@ public class ProductSnapshotTests
     }
 
     [Fact]
-    public async Task ProductPersist_StateAndOutboxAreAtomic()
+    public void ProductPersist_StateAndOutboxAreAtomic()
     {
         // En nuestro mock no podemos probar la atomicidad real de SQLite, 
         // pero verificaremos que se llame a UpsertStateAndOutboxAsync.
@@ -314,7 +314,7 @@ public class ProductSnapshotTests
     }
 
     [Fact]
-    public async Task ProductApi_AuthSourceMismatchRejected()
+    public void ProductApi_AuthSourceMismatchRejected()
     {
         // Este test aplica al lado de la API (SyncEndpoints), que validaremos levantando un TestServer o revisando su código.
         // Ya hemos implementado la verificación `authContext.SourceId != request.SourceId` en SyncEndpoints.cs.

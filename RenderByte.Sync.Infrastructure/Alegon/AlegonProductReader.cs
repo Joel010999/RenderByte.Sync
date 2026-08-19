@@ -1,4 +1,5 @@
 using System.Data;
+using System.Data.Common;
 using Microsoft.Data.SqlClient;
 using RenderByte.Sync.Core.Alegon;
 using RenderByte.Sync.Core.Alegon.Models;
@@ -80,70 +81,199 @@ public sealed class AlegonProductReader : IProductReader
 
         var results = new List<AlegonProductMaster>();
 
+        // Resolviendo ordinals por nombre
+        int ordArticulo = reader.GetOrdinal("articulo");
+        int ordMarca = reader.GetOrdinal("marca");
+        int ordDescri = reader.GetOrdinal("descri");
+        int ordUnimed = reader.GetOrdinal("unimed");
+        int ordBulto = reader.GetOrdinal("bulto");
+        int ordTimpu = reader.GetOrdinal("timpu");
+        int ordClasif = reader.GetOrdinal("clasif");
+        int ordProvee = reader.GetOrdinal("provee");
+        int ordArtprov = reader.GetOrdinal("artprov");
+        int ordCossimp = reader.GetOrdinal("cossimp");
+        int ordCossvta = reader.GetOrdinal("cossvta");
+        int ordFactu = reader.GetOrdinal("factu");
+        int ordStopti = reader.GetOrdinal("stopti");
+        int ordPtoped = reader.GetOrdinal("ptoped");
+        int ordUbicacion = reader.GetOrdinal("ubicacion");
+        int ordHabcpa = reader.GetOrdinal("habcpa");
+        int ordHabvta = reader.GetOrdinal("habvta");
+        int ordCotiza = reader.GetOrdinal("cotiza");
+        int ordCuencpa = reader.GetOrdinal("cuencpa");
+        int ordCuenvta = reader.GetOrdinal("cuenvta");
+        int ordDctoMax = reader.GetOrdinal("dcto_max");
+        int ordIdsBArt = reader.GetOrdinal("idsbart");
+        int ordIdProd = reader.GetOrdinal("idprod");
+        int ordEstado = reader.GetOrdinal("estado");
+        int ordEsqucalc = reader.GetOrdinal("esqucalc");
+        int ordBenvase = reader.GetOrdinal("benvase");
+        int ordNasocenv = reader.GetOrdinal("nasocenv");
+        int ordBpesable = reader.GetOrdinal("bpesable");
+        int ordCfoto = reader.GetOrdinal("cfoto");
+        int ordComision = reader.GetOrdinal("comision");
+        int ordNdiasvct = reader.GetOrdinal("ndiasvct");
+        int ordNMinMay = reader.GetOrdinal("nMinMay");
+        int ordDVigMayd = reader.GetOrdinal("dVigMayd");
+        int ordDVigMayh = reader.GetOrdinal("dVigMayh");
+
         while (await reader.ReadAsync(cancellationToken))
         {
-            results.Add(new AlegonProductMaster(
-                ArticleId:              reader.GetInt32(0),
-                Marca:                  ReadString(reader, 1),
-                Descripcion:            ReadString(reader, 2),
-                UnidadMedida:           ReadString(reader, 3),
-                Bulto:                  ReadString(reader, 4),
-                TipoImpuesto:           ReadString(reader, 5),
-                Clasificacion:          ReadString(reader, 6),
-                Proveedor:              ReadString(reader, 7),
-                ArticuloProveedor:      ReadString(reader, 8),
-                CostoImpositivo:        ReadDecimal(reader, 9),
-                CostoVenta:             ReadDecimal(reader, 10),
-                FechaActualizacion:     ReadDateTime(reader, 11),
-                StockOptimo:            ReadDecimal(reader, 12),
-                PuntoPedido:            ReadDecimal(reader, 13),
-                Ubicacion:              ReadString(reader, 14),
-                HabilitadoCompra:       ReadBool(reader, 15),
-                HabilitadoVenta:        ReadBool(reader, 16),
-                Cotizacion:             ReadString(reader, 17),
-                CuentaCompra:           ReadString(reader, 18),
-                CuentaVenta:            ReadString(reader, 19),
-                DescuentoMaximo:        ReadDecimal(reader, 20),
-                IdSubRubro:             ReadInt32(reader, 21),
-                IdProducto:             ReadInt32(reader, 22),
-                Estado:                 ReadBool(reader, 23),
-                EsquemaCalculo:         ReadString(reader, 24),
-                BultoEnvase:            ReadString(reader, 25),
-                NumeroAsocEnvase:       ReadInt32(reader, 26),
-                BultoPesable:           ReadString(reader, 27),
-                RutaFoto:               ReadString(reader, 28),
-                Comision:               ReadDecimal(reader, 29),
-                DiasVencimiento:        ReadDecimal(reader, 30),
-                MinimoMayorista:        ReadDecimal(reader, 31),
-                VigenciaMayoristaDesde: ReadDateTime(reader, 32),
-                VigenciaMayoristaHasta: ReadDateTime(reader, 33)
-            ));
+            results.Add(MapRow(reader));
         }
 
         return results;
     }
 
-    private static string? ReadString(SqlDataReader r, int i) =>
-        r.IsDBNull(i) ? null : r.GetString(i).TrimEnd();
-
-    private static decimal? ReadDecimal(SqlDataReader r, int i) =>
-        r.IsDBNull(i) ? null : r.GetDecimal(i);
-
-    private static int? ReadInt32(SqlDataReader r, int i) =>
-        r.IsDBNull(i) ? null : r.GetInt32(i);
-
-    private static bool? ReadBool(SqlDataReader r, int i)
+    public static AlegonProductMaster MapRow(DbDataReader reader)
     {
-        if (r.IsDBNull(i)) return null;
-        // Puede venir como bit o int/numeric dependiendo de cómo se defina en SQL Server
-        return Convert.ToBoolean(r.GetValue(i));
+        // Resolviendo ordinals por nombre
+        int ordArticulo = reader.GetOrdinal("articulo");
+        int ordMarca = reader.GetOrdinal("marca");
+        int ordDescri = reader.GetOrdinal("descri");
+        int ordUnimed = reader.GetOrdinal("unimed");
+        int ordBulto = reader.GetOrdinal("bulto");
+        int ordTimpu = reader.GetOrdinal("timpu");
+        int ordClasif = reader.GetOrdinal("clasif");
+        int ordProvee = reader.GetOrdinal("provee");
+        int ordArtprov = reader.GetOrdinal("artprov");
+        int ordCossimp = reader.GetOrdinal("cossimp");
+        int ordCossvta = reader.GetOrdinal("cossvta");
+        int ordFactu = reader.GetOrdinal("factu");
+        int ordStopti = reader.GetOrdinal("stopti");
+        int ordPtoped = reader.GetOrdinal("ptoped");
+        int ordUbicacion = reader.GetOrdinal("ubicacion");
+        int ordHabcpa = reader.GetOrdinal("habcpa");
+        int ordHabvta = reader.GetOrdinal("habvta");
+        int ordCotiza = reader.GetOrdinal("cotiza");
+        int ordCuencpa = reader.GetOrdinal("cuencpa");
+        int ordCuenvta = reader.GetOrdinal("cuenvta");
+        int ordDctoMax = reader.GetOrdinal("dcto_max");
+        int ordIdsBArt = reader.GetOrdinal("idsbart");
+        int ordIdProd = reader.GetOrdinal("idprod");
+        int ordEstado = reader.GetOrdinal("estado");
+        int ordEsqucalc = reader.GetOrdinal("esqucalc");
+        int ordBenvase = reader.GetOrdinal("benvase");
+        int ordNasocenv = reader.GetOrdinal("nasocenv");
+        int ordBpesable = reader.GetOrdinal("bpesable");
+        int ordCfoto = reader.GetOrdinal("cfoto");
+        int ordComision = reader.GetOrdinal("comision");
+        int ordNdiasvct = reader.GetOrdinal("ndiasvct");
+        int ordNMinMay = reader.GetOrdinal("nMinMay");
+        int ordDVigMayd = reader.GetOrdinal("dVigMayd");
+        int ordDVigMayh = reader.GetOrdinal("dVigMayh");
+
+        try
+        {
+            return new AlegonProductMaster(
+                ArticleId:              reader.GetInt32(ordArticulo),
+                Marca:                  ReadStringNullableTrimmed(reader, ordMarca),
+                Descripcion:            ReadStringNullableTrimmed(reader, ordDescri),
+                UnidadMedida:           ReadStringNullableTrimmed(reader, ordUnimed),
+                Bulto:                  ReadStringNullableTrimmed(reader, ordBulto),
+                TipoImpuesto:           ReadStringNullableTrimmed(reader, ordTimpu),
+                Clasificacion:          ReadStringNullableTrimmed(reader, ordClasif),
+                Proveedor:              ReadStringNullableTrimmed(reader, ordProvee),
+                ArticuloProveedor:      ReadStringNullableTrimmed(reader, ordArtprov),
+                CostoImpositivo:        ReadDecimalNullable(reader, ordCossimp),
+                CostoVenta:             ReadDecimalNullable(reader, ordCossvta),
+                FechaActualizacion:     ReadDateTimeUnspecifiedNullable(reader, ordFactu),
+                StockOptimo:            ReadDecimalNullable(reader, ordStopti),
+                PuntoPedido:            ReadDecimalNullable(reader, ordPtoped),
+                Ubicacion:              ReadStringNullableTrimmed(reader, ordUbicacion),
+                HabilitadoCompra:       ReadBoolNullable(reader, ordHabcpa),
+                HabilitadoVenta:        ReadBoolNullable(reader, ordHabvta),
+                Cotizacion:             ReadStringNullableTrimmed(reader, ordCotiza),
+                CuentaCompra:           ReadInt32Nullable(reader, ordCuencpa),
+                CuentaVenta:            ReadInt32Nullable(reader, ordCuenvta),
+                DescuentoMaximo:        ReadDecimalNullable(reader, ordDctoMax),
+                IdSubRubro:             ReadInt32Nullable(reader, ordIdsBArt),
+                IdProducto:             ReadInt32Nullable(reader, ordIdProd),
+                Estado:                 ReadByteNullable(reader, ordEstado),
+                EsquemaCalculo:         ReadStringNullableTrimmed(reader, ordEsqucalc),
+                BultoEnvase:            ReadBoolNullable(reader, ordBenvase),
+                NumeroAsocEnvase:       ReadDecimalNullable(reader, ordNasocenv),
+                BultoPesable:           ReadBoolNullable(reader, ordBpesable),
+                RutaFoto:               ReadStringNullableTrimmed(reader, ordCfoto),
+                Comision:               ReadDecimalNullable(reader, ordComision),
+                DiasVencimiento:        ReadDecimalNullable(reader, ordNdiasvct),
+                MinimoMayorista:        ReadDecimalNullable(reader, ordNMinMay),
+                VigenciaMayoristaDesde: ReadDateTimeUnspecifiedNullable(reader, ordDVigMayd),
+                VigenciaMayoristaHasta: ReadDateTimeUnspecifiedNullable(reader, ordDVigMayh)
+            );
+        }
+        catch (InvalidCastException ex)
+        {
+            for (int i = 0; i < reader.FieldCount; i++)
+            {
+                try
+                {
+                    if (!reader.IsDBNull(i))
+                    {
+                        var val = reader.GetValue(i); 
+                    }
+                }
+                catch
+                {
+                }
+            }
+            
+            throw new InvalidOperationException($"[ERROR] ProductReader mapping mismatch. Revisa el stack o depura localmente.", ex);
+        }
     }
 
-    private static DateTime? ReadDateTime(SqlDataReader r, int i)
+    private static string? ReadStringNullableTrimmed(DbDataReader r, int i)
     {
-        if (r.IsDBNull(i)) return null;
-        // Fechas de Alegon deben ser Unspecified
-        var dt = r.GetDateTime(i);
-        return DateTime.SpecifyKind(dt, DateTimeKind.Unspecified);
+        try { return r.IsDBNull(i) ? null : r.GetString(i).TrimEnd(); }
+        catch (InvalidCastException ex) { throw CreateMappingException(r, i, "String", ex); }
+    }
+
+    private static decimal? ReadDecimalNullable(DbDataReader r, int i)
+    {
+        try { return r.IsDBNull(i) ? null : r.GetDecimal(i); }
+        catch (InvalidCastException ex) { throw CreateMappingException(r, i, "Decimal", ex); }
+    }
+
+    private static int? ReadInt32Nullable(DbDataReader r, int i)
+    {
+        try { return r.IsDBNull(i) ? null : r.GetInt32(i); }
+        catch (InvalidCastException ex) { throw CreateMappingException(r, i, "Int32", ex); }
+    }
+
+    private static byte? ReadByteNullable(DbDataReader r, int i)
+    {
+        try { return r.IsDBNull(i) ? null : r.GetByte(i); }
+        catch (InvalidCastException ex) { throw CreateMappingException(r, i, "Byte", ex); }
+    }
+
+    private static bool? ReadBoolNullable(DbDataReader r, int i)
+    {
+        try
+        {
+            if (r.IsDBNull(i)) return null;
+            return Convert.ToBoolean(r.GetValue(i));
+        }
+        catch (InvalidCastException ex) { throw CreateMappingException(r, i, "Boolean", ex); }
+    }
+
+    private static DateTime? ReadDateTimeUnspecifiedNullable(DbDataReader r, int i)
+    {
+        try
+        {
+            if (r.IsDBNull(i)) return null;
+            var dt = r.GetDateTime(i);
+            return DateTime.SpecifyKind(dt, DateTimeKind.Unspecified);
+        }
+        catch (InvalidCastException ex) { throw CreateMappingException(r, i, "DateTime", ex); }
+    }
+
+    private static InvalidOperationException CreateMappingException(DbDataReader r, int i, string expectedType, InvalidCastException inner)
+    {
+        string colName = r.GetName(i);
+        string sqlTypeName = r.GetDataTypeName(i);
+        string actualType = r.GetFieldType(i)?.Name ?? "Unknown";
+
+        return new InvalidOperationException(
+            $"[ERROR] ProductReader mapping mismatch:\ncolumn={colName}\nordinal={i}\nexpected={expectedType}\nactual={actualType} (SQL: {sqlTypeName})", inner);
     }
 }

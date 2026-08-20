@@ -1024,11 +1024,12 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore, IProductStore, IStoc
             using var cmdOutbox = _connection.CreateCommand();
             cmdOutbox.Transaction = (SqliteTransaction)transaction;
             cmdOutbox.CommandText = """
-                INSERT INTO stock_outbox (source_id, depo, article_id, bulto, business_key, content_hash, costo, precio, saldo, piezas, is_present, status, retry_count, created_at)
-                VALUES (@sourceId, @depo, @articleId, @bulto, @businessKey, @contentHash, @costo, @precio, @saldo, @piezas, 1, 'pending', 0, @now)
+                INSERT INTO stock_outbox (source_id, branch_id, depo, article_id, bulto, business_key, content_hash, costo, precio, saldo, piezas, is_present, status, retry_count, created_at)
+                VALUES (@sourceId, @branchId, @depo, @articleId, @bulto, @businessKey, @contentHash, @costo, @precio, @saldo, @piezas, 1, 'pending', 0, @now)
                 ON CONFLICT(source_id, depo, article_id, bulto, content_hash) WHERE status = 'pending' DO NOTHING;
                 """;
             cmdOutbox.Parameters.AddWithValue("@sourceId", sourceId);
+            cmdOutbox.Parameters.AddWithValue("@branchId", branchId);
             cmdOutbox.Parameters.AddWithValue("@depo", stock.Depo);
             cmdOutbox.Parameters.AddWithValue("@articleId", stock.ArticleId);
             cmdOutbox.Parameters.AddWithValue("@bulto", stock.Bulto);
@@ -1080,11 +1081,12 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore, IProductStore, IStoc
                 using var cmdOutbox = _connection.CreateCommand();
                 cmdOutbox.Transaction = (SqliteTransaction)transaction;
                 cmdOutbox.CommandText = """
-                    INSERT INTO stock_outbox (source_id, depo, article_id, bulto, business_key, content_hash, is_present, status, retry_count, created_at)
-                    VALUES (@sourceId, @depo, @articleId, @bulto, @businessKey, 'TOMBSTONE', 0, 'pending', 0, @now)
+                    INSERT INTO stock_outbox (source_id, branch_id, depo, article_id, bulto, business_key, content_hash, is_present, status, retry_count, created_at)
+                    VALUES (@sourceId, @branchId, @depo, @articleId, @bulto, @businessKey, 'TOMBSTONE', 0, 'pending', 0, @now)
                     ON CONFLICT(source_id, depo, article_id, bulto, content_hash) WHERE status = 'pending' DO NOTHING;
                     """;
                 cmdOutbox.Parameters.AddWithValue("@sourceId", sourceId);
+                cmdOutbox.Parameters.AddWithValue("@branchId", branchId);
                 cmdOutbox.Parameters.AddWithValue("@depo", depo);
                 cmdOutbox.Parameters.AddWithValue("@articleId", articleId);
                 cmdOutbox.Parameters.AddWithValue("@bulto", bulto);

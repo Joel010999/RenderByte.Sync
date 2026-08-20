@@ -161,6 +161,12 @@ public static class StocksSyncOnceAgent
                     Console.WriteLine($"updated={res.Updated}");
                     Console.WriteLine($"unchanged={res.Unchanged}");
 
+                    if (res.BatchId != batchId)
+                    {
+                        Console.Error.WriteLine($"[STOCK SYNC] ERROR: El batch_id del ACK ({res.BatchId}) no coincide con el enviado ({batchId}).");
+                        return 1;
+                    }
+
                     if (res.Accepted == pending.Count && (res.Inserted + res.Updated + res.Unchanged) == res.Accepted)
                     {
                         foreach (var msg in pending)

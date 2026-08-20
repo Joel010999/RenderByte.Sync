@@ -1,10 +1,10 @@
-
 using RenderByte.Sync.Agent;
 using RenderByte.Sync.Core.Alegon;
 using RenderByte.Sync.Core.Alegon.Models;
 using RenderByte.Sync.Persistence;
 using System.Text.Json;
 using Xunit;
+using System.Net;
 
 namespace RenderByte.Sync.Tests;
 
@@ -20,6 +20,14 @@ public class StockSnapshotTests
         }
     }
 
+    private class MockHttpHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+        }
+    }
+
     [Fact]
     public async Task RunAsync_ShouldInsertNewStocksToOutbox()
     {
@@ -31,9 +39,18 @@ public class StockSnapshotTests
         try
         {
             await using var store = new SqliteSyncBatchStore(dbPath);
-            await store.InitializeAsync(sourceId, 1000, CancellationToken.None);
+            await store.InitializeAsync(sourceId, 1, CancellationToken.None);
 
-            await StocksSyncOnceAgent.RunAsync(sourceId, reader, new string[0], CancellationToken.None, store);
+            var conn = (Microsoft.Data.Sqlite.SqliteConnection)store.GetType().GetField("_connection", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(store)!;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "INSERT INTO sync_checkpoint (id, branch_id, fedepo, clave_u, item, updated_at) VALUES (1, 1, '2024-01-01T00:00:00.0000000', 'DUMMY', 1, '2024-01-01T00:00:00.0000000Z')";
+            await cmd.ExecuteNonQueryAsync();
+
+            Environment.SetEnvironmentVariable("RENDERBYTE_SYNC_API_URL", "http://localhost");
+            Environment.SetEnvironmentVariable("RENDERBYTE_SYNC_API_KEY", "test");
+            
+            var res = await StocksSyncOnceAgent.RunAsync(sourceId, reader, new string[0], CancellationToken.None, store, new MockHttpHandler());
+            Assert.Equal(1, res); // 1 because HTTP 500
 
             var pending = await store.GetPendingStockOutboxAsync(100);
             Assert.Single(pending);
@@ -56,7 +73,15 @@ public class StockSnapshotTests
         try
         {
             await using var store = new SqliteSyncBatchStore(dbPath);
-            await store.InitializeAsync(sourceId, 1000, CancellationToken.None);
+            await store.InitializeAsync(sourceId, 1, CancellationToken.None);
+
+            var conn = (Microsoft.Data.Sqlite.SqliteConnection)store.GetType().GetField("_connection", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(store)!;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "INSERT INTO sync_checkpoint (id, branch_id, fedepo, clave_u, item, updated_at) VALUES (1, 1, '2024-01-01T00:00:00.0000000', 'DUMMY', 1, '2024-01-01T00:00:00.0000000Z')";
+            await cmd.ExecuteNonQueryAsync();
+
+            Environment.SetEnvironmentVariable("RENDERBYTE_SYNC_API_URL", "http://localhost");
+            Environment.SetEnvironmentVariable("RENDERBYTE_SYNC_API_KEY", "test");
 
             var existingStock = new AlegonStock(1, 10, "UN", 10.5m, 20m, 5m, null);
             var bizKey = StockCanonicalizer.ComputeBusinessKey(sourceId, 1, 10, "UN");
@@ -67,7 +92,8 @@ public class StockSnapshotTests
             foreach (var p in pending1) await store.MarkStockOutboxSentAsync(p.Id);
 
             // Now reader returns empty. Run agent.
-            await StocksSyncOnceAgent.RunAsync(sourceId, reader, new string[0], CancellationToken.None, store);
+            var res = await StocksSyncOnceAgent.RunAsync(sourceId, reader, new string[0], CancellationToken.None, store, new MockHttpHandler());
+            Assert.Equal(1, res);
 
             var pending2 = await store.GetPendingStockOutboxAsync(100);
             Assert.Single(pending2);

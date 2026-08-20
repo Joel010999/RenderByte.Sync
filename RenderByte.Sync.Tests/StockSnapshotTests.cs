@@ -99,7 +99,8 @@ public class StockSnapshotTests
             Assert.Single(pending2);
             Assert.Equal(10, pending2[0].ArticleId);
             Assert.False(pending2[0].IsPresent); // Tombstone
-            Assert.Equal("TOMBSTONE", pending2[0].ContentHash);
+            var expectedTombstoneHash = StockCanonicalizer.ComputeContentHash(new AlegonStock(1, 10, "UN", null, null, null, null), false);
+            Assert.Equal(expectedTombstoneHash, pending2[0].ContentHash);
         }
         finally
         {

@@ -37,6 +37,7 @@ public interface IStockStore
         int depo,
         int articleId,
         string bulto,
+        string contentHash,
         CancellationToken cancellationToken = default);
         
     Task<long> GetPendingOutboxCountAsync(CancellationToken cancellationToken = default);

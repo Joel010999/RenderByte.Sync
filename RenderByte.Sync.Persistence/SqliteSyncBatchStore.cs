@@ -1058,6 +1058,7 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore, IProductStore, IStoc
         int depo,
         int articleId,
         string bulto,
+        string contentHash,
         CancellationToken cancellationToken = default)
     {
         ThrowIfNotInitialized();
@@ -1082,7 +1083,7 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore, IProductStore, IStoc
                 cmdOutbox.Transaction = (SqliteTransaction)transaction;
                 cmdOutbox.CommandText = """
                     INSERT INTO stock_outbox (source_id, branch_id, depo, article_id, bulto, business_key, content_hash, is_present, status, retry_count, created_at)
-                    VALUES (@sourceId, @branchId, @depo, @articleId, @bulto, @businessKey, 'TOMBSTONE', 0, 'pending', 0, @now)
+                    VALUES (@sourceId, @branchId, @depo, @articleId, @bulto, @businessKey, @contentHash, 0, 'pending', 0, @now)
                     ON CONFLICT(source_id, depo, article_id, bulto, content_hash) WHERE status = 'pending' DO NOTHING;
                     """;
                 cmdOutbox.Parameters.AddWithValue("@sourceId", sourceId);
@@ -1091,6 +1092,7 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore, IProductStore, IStoc
                 cmdOutbox.Parameters.AddWithValue("@articleId", articleId);
                 cmdOutbox.Parameters.AddWithValue("@bulto", bulto);
                 cmdOutbox.Parameters.AddWithValue("@businessKey", businessKey);
+                cmdOutbox.Parameters.AddWithValue("@contentHash", contentHash);
                 cmdOutbox.Parameters.AddWithValue("@now", nowStr);
                 await cmdOutbox.ExecuteNonQueryAsync(cancellationToken);
             }

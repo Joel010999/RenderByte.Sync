@@ -298,12 +298,28 @@ public static class SyncEndpoints
 
             var connectionString = config.GetConnectionString("DefaultConnection");
 
+            var hashRegex = new System.Text.RegularExpressions.Regex("^[a-f0-9]{64}$", System.Text.RegularExpressions.RegexOptions.Compiled);
             var mandatoryErrors = new List<string>();
             foreach (var stock in request.Stocks)
             {
                 if (string.IsNullOrWhiteSpace(stock.BusinessKey) || string.IsNullOrWhiteSpace(stock.ContentHash) || stock.ArticleId <= 0 || string.IsNullOrWhiteSpace(stock.Bulto))
                 {
                     mandatoryErrors.Add($"Stock inválido en batch (ArticleId: {stock.ArticleId}, Bulto: {stock.Bulto}).");
+                }
+                
+                if (stock.BusinessKey != null && !hashRegex.IsMatch(stock.BusinessKey))
+                {
+                    mandatoryErrors.Add($"Stock business_key inválido (ArticleId: {stock.ArticleId}, Bulto: {stock.Bulto}). Debe ser SHA256 64 chars lowercase hex.");
+                }
+
+                if (stock.ContentHash != null && !hashRegex.IsMatch(stock.ContentHash))
+                {
+                    mandatoryErrors.Add($"Stock content_hash inválido (ArticleId: {stock.ArticleId}, Bulto: {stock.Bulto}). Debe ser SHA256 64 chars lowercase hex.");
+                }
+
+                if (stock.Depo != request.BranchId)
+                {
+                    mandatoryErrors.Add($"Depot Validation Failed: El depo {stock.Depo} no coincide con el branch_id del request {request.BranchId}.");
                 }
             }
 
@@ -322,42 +338,35 @@ public static class SyncEndpoints
 
             try
             {
-                var selectSql = "SELECT content_hash FROM stock_raw WHERE source_id = @SourceId AND branch_id = @BranchId AND article_id = @ArticleId AND bulto = @Bulto;";
+                var selectSql = "SELECT content_hash FROM stock_levels_raw WHERE source_id = @SourceId AND depo = @Depo AND article_id = @ArticleId AND bulto = @Bulto;";
                 var insertSql = @"
-                    INSERT INTO stock_raw (
-                        organization_id, source_id, branch_id, article_id, bulto, business_key, content_hash, payload, is_present
+                    INSERT INTO stock_levels_raw (
+                        organization_id, source_id, branch_id, depo, article_id, bulto, business_key, content_hash, costo, precio, saldo, piezas, is_present
                     ) VALUES (
-                        @OrganizationId, @SourceId, @BranchId, @ArticleId, @Bulto, @BusinessKey, @ContentHash, @Payload::JSONB, @IsPresent
+                        @OrganizationId, @SourceId, @BranchId, @Depo, @ArticleId, @Bulto, @BusinessKey, @ContentHash, @Costo::NUMERIC, @Precio::NUMERIC, @Saldo::NUMERIC, @Piezas::NUMERIC, @IsPresent
                     );";
                 var updateSql = @"
-                    UPDATE stock_raw SET
+                    UPDATE stock_levels_raw SET
+                        branch_id = @BranchId,
                         business_key = @BusinessKey,
                         content_hash = @ContentHash,
-                        payload = @Payload::JSONB,
+                        costo = @Costo::NUMERIC,
+                        precio = @Precio::NUMERIC,
+                        saldo = @Saldo::NUMERIC,
+                        piezas = @Piezas::NUMERIC,
                         is_present = @IsPresent,
                         source_seen_at = NOW()
-                    WHERE source_id = @SourceId AND branch_id = @BranchId AND article_id = @ArticleId AND bulto = @Bulto;";
+                    WHERE source_id = @SourceId AND depo = @Depo AND article_id = @ArticleId AND bulto = @Bulto;";
 
                 foreach (var stock in request.Stocks)
                 {
-                    bool isTombstone = stock.ContentHash == "TOMBSTONE";
-
                     var existingHash = await connection.ExecuteScalarAsync<string>(selectSql, new
                     {
                         SourceId = authContext.SourceId,
-                        BranchId = request.BranchId,
+                        Depo = stock.Depo,
                         ArticleId = stock.ArticleId,
                         Bulto = stock.Bulto
                     }, transaction);
-
-                    var payloadObj = new
-                    {
-                        stock.Costo,
-                        stock.Precio,
-                        stock.Saldo,
-                        stock.Piezas
-                    };
-                    string payloadJson = JsonSerializer.Serialize(payloadObj);
 
                     if (existingHash == null)
                     {
@@ -366,12 +375,16 @@ public static class SyncEndpoints
                             OrganizationId = authContext.OrganizationId,
                             SourceId = authContext.SourceId,
                             BranchId = request.BranchId,
+                            Depo = stock.Depo,
                             ArticleId = stock.ArticleId,
                             Bulto = stock.Bulto,
                             BusinessKey = stock.BusinessKey,
                             ContentHash = stock.ContentHash,
-                            Payload = isTombstone ? "{}" : payloadJson,
-                            IsPresent = !isTombstone
+                            Costo = stock.Costo,
+                            Precio = stock.Precio,
+                            Saldo = stock.Saldo,
+                            Piezas = stock.Piezas,
+                            IsPresent = stock.IsPresent
                         }, transaction);
                         inserted++;
                     }
@@ -381,12 +394,16 @@ public static class SyncEndpoints
                         {
                             SourceId = authContext.SourceId,
                             BranchId = request.BranchId,
+                            Depo = stock.Depo,
                             ArticleId = stock.ArticleId,
                             Bulto = stock.Bulto,
                             BusinessKey = stock.BusinessKey,
                             ContentHash = stock.ContentHash,
-                            Payload = isTombstone ? "{}" : payloadJson,
-                            IsPresent = !isTombstone
+                            Costo = stock.Costo,
+                            Precio = stock.Precio,
+                            Saldo = stock.Saldo,
+                            Piezas = stock.Piezas,
+                            IsPresent = stock.IsPresent
                         }, transaction);
                         updated++;
                     }
@@ -410,11 +427,17 @@ public static class SyncEndpoints
 
                 return Results.Ok(response);
             }
+            catch (PostgresException ex) when (ex.SqlState == "22P03" || ex.SqlState == "22P02") // Invalid text representation (numeric parse error)
+            {
+                await transaction.RollbackAsync();
+                return Results.BadRequest(new SyncErrorResponse("INVALID_PAYLOAD", "Error de parseo numérico o formato inválido.", request.BatchId, null));
+            }
             catch (Exception)
             {
                 await transaction.RollbackAsync();
                 return Results.Problem("Error interno guardando los stocks.", statusCode: 500);
             }
         });
+
     }
 }

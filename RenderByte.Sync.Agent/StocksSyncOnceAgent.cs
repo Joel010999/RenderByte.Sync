@@ -1,5 +1,6 @@
 using System.Text.Json;
 using RenderByte.Sync.Core.Alegon;
+using RenderByte.Sync.Core.Alegon.Models;
 using RenderByte.Sync.Persistence;
 using RenderByte.Sync.Contracts;
 
@@ -92,7 +93,10 @@ public static class StocksSyncOnceAgent
         {
             if (state.IsPresent && !presentKeysInSnapshot.Contains(state.BusinessKey))
             {
-                await store.MarkStockMissingAndCreateTombstoneAsync(sourceId, branchId, state.BusinessKey, state.Depo, state.ArticleId, state.Bulto, ct);
+                var tombstoneStock = new AlegonStock(state.Depo, state.ArticleId, state.Bulto, null, null, null, null);
+                var tombstoneHash = StockCanonicalizer.ComputeContentHash(tombstoneStock, isPresent: false);
+
+                await store.MarkStockMissingAndCreateTombstoneAsync(sourceId, branchId, state.BusinessKey, state.Depo, state.ArticleId, state.Bulto, tombstoneHash, ct);
                 missing++;
             }
         }

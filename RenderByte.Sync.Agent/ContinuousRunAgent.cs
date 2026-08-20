@@ -82,13 +82,21 @@ public static class ContinuousRunAgent
             var productService = new ProductSyncService(productReader, store, client, options.SourceId, branchId);
             var stockService = new StockSyncService(stockReader, store, client, options.SourceId, branchId);
 
-            DateTimeOffset nextMovementAttempt = DateTimeOffset.MinValue;
-            DateTimeOffset nextStockAttempt = DateTimeOffset.MinValue;
-            DateTimeOffset nextProductAttempt = DateTimeOffset.MinValue;
+            DateTimeOffset nextMovementCaptureAttempt = DateTimeOffset.MinValue;
+            DateTimeOffset nextMovementTransportAttempt = DateTimeOffset.MinValue;
+            DateTimeOffset nextStockCaptureAttempt = DateTimeOffset.MinValue;
+            DateTimeOffset nextStockTransportAttempt = DateTimeOffset.MinValue;
+            DateTimeOffset nextProductCaptureAttempt = DateTimeOffset.MinValue;
+            DateTimeOffset nextProductTransportAttempt = DateTimeOffset.MinValue;
 
-            int movementErrors = 0;
-            int stockErrors = 0;
-            int productErrors = 0;
+            int movementCaptureErrors = 0;
+            int movementTransportErrors = 0;
+            int stockCaptureErrors = 0;
+            int stockTransportErrors = 0;
+            int productCaptureErrors = 0;
+            int productTransportErrors = 0;
+
+            TimeSpan transportIdleInterval = TimeSpan.FromSeconds(60);
 
             try
             {
@@ -97,13 +105,19 @@ public static class ContinuousRunAgent
                     var now = GetUtcNow();
                     var tolerance = TimeSpan.FromMilliseconds(50);
                     
-                    TimeSpan delayMov = now + tolerance < nextMovementAttempt ? nextMovementAttempt - now : TimeSpan.Zero;
-                    TimeSpan delayStk = now + tolerance < nextStockAttempt ? nextStockAttempt - now : TimeSpan.Zero;
-                    TimeSpan delayPrd = now + tolerance < nextProductAttempt ? nextProductAttempt - now : TimeSpan.Zero;
+                    TimeSpan delayMovCap = now + tolerance < nextMovementCaptureAttempt ? nextMovementCaptureAttempt - now : TimeSpan.Zero;
+                    TimeSpan delayMovTra = now + tolerance < nextMovementTransportAttempt ? nextMovementTransportAttempt - now : TimeSpan.Zero;
+                    TimeSpan delayStkCap = now + tolerance < nextStockCaptureAttempt ? nextStockCaptureAttempt - now : TimeSpan.Zero;
+                    TimeSpan delayStkTra = now + tolerance < nextStockTransportAttempt ? nextStockTransportAttempt - now : TimeSpan.Zero;
+                    TimeSpan delayPrdCap = now + tolerance < nextProductCaptureAttempt ? nextProductCaptureAttempt - now : TimeSpan.Zero;
+                    TimeSpan delayPrdTra = now + tolerance < nextProductTransportAttempt ? nextProductTransportAttempt - now : TimeSpan.Zero;
                     
-                    TimeSpan minDelay = delayMov;
-                    if (delayStk < minDelay) minDelay = delayStk;
-                    if (delayPrd < minDelay) minDelay = delayPrd;
+                    TimeSpan[] delays = { delayMovCap, delayMovTra, delayStkCap, delayStkTra, delayPrdCap, delayPrdTra };
+                    TimeSpan minDelay = delays[0];
+                    for (int i = 1; i < delays.Length; i++)
+                    {
+                        if (delays[i] < minDelay) minDelay = delays[i];
+                    }
                     
                     if (minDelay > TimeSpan.Zero)
                     {
@@ -111,105 +125,164 @@ public static class ContinuousRunAgent
                         now = GetUtcNow();
                     }
 
-                    // Priorities: 1. Movements, 2. Stock, 3. Products
-                    if (now + tolerance >= nextMovementAttempt && !ct.IsCancellationRequested)
+                    // 1. MOVEMENTS CAPTURE
+                    if (now + tolerance >= nextMovementCaptureAttempt && !ct.IsCancellationRequested)
                     {
                         bool hadError = false;
                         try { await movementService.CaptureAsync(ct); }
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
                         {
-                            Console.Error.WriteLine($"[WARN] MOVEMENTS capture failure: {ex.Message}");
-                            hadError = true;
-                        }
-
-                        try { await movementService.SendPendingAsync(ct); }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception ex)
-                        {
-                            Console.Error.WriteLine($"[WARN] MOVEMENTS transport failure: {ex.Message}");
+                            Console.Error.WriteLine($"[WARN] MOVEMENTS CAPTURE failure: {ex.Message}");
                             hadError = true;
                         }
 
                         if (hadError)
                         {
-                            movementErrors++;
-                            var wait = GetBackoff(movementErrors);
-                            Console.Error.WriteLine($"[SCHEDULER] MOVEMENTS backoff {wait.TotalSeconds}s.");
-                            nextMovementAttempt = now + wait;
+                            movementCaptureErrors++;
+                            var wait = GetBackoff(movementCaptureErrors);
+                            Console.Error.WriteLine($"[SCHEDULER] MOVEMENTS CAPTURE backoff {wait.TotalSeconds}s.");
+                            nextMovementCaptureAttempt = now + wait;
                         }
                         else
                         {
-                            movementErrors = 0;
-                            nextMovementAttempt = now + TimeSpan.FromSeconds(options.MovementIntervalSeconds);
+                            movementCaptureErrors = 0;
+                            nextMovementCaptureAttempt = now + TimeSpan.FromSeconds(options.MovementIntervalSeconds);
                         }
                     }
 
                     now = GetUtcNow();
-                    if (now + tolerance >= nextStockAttempt && !ct.IsCancellationRequested)
+                    // 2. MOVEMENTS TRANSPORT
+                    if (now + tolerance >= nextMovementTransportAttempt && !ct.IsCancellationRequested)
+                    {
+                        bool hadError = false;
+                        try { await movementService.SendPendingAsync(ct); }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[WARN] MOVEMENTS SYNC failure: {ex.Message}");
+                            hadError = true;
+                        }
+
+                        if (hadError)
+                        {
+                            movementTransportErrors++;
+                            var wait = GetBackoff(movementTransportErrors);
+                            Console.Error.WriteLine($"[SCHEDULER] MOVEMENTS SYNC backoff {wait.TotalSeconds}s.");
+                            nextMovementTransportAttempt = now + wait;
+                        }
+                        else
+                        {
+                            movementTransportErrors = 0;
+                            nextMovementTransportAttempt = now + transportIdleInterval;
+                        }
+                    }
+
+                    now = GetUtcNow();
+                    // 3. STOCK CAPTURE
+                    if (now + tolerance >= nextStockCaptureAttempt && !ct.IsCancellationRequested)
                     {
                         bool hadError = false;
                         try { await stockService.CaptureAsync(ct); }
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
                         {
-                            Console.Error.WriteLine($"[WARN] STOCK capture failure: {ex.Message}");
-                            hadError = true;
-                        }
-
-                        try { await stockService.SendPendingAsync(ct); }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception ex)
-                        {
-                            Console.Error.WriteLine($"[WARN] STOCK transport failure: {ex.Message}");
+                            Console.Error.WriteLine($"[WARN] STOCK CAPTURE failure: {ex.Message}");
                             hadError = true;
                         }
 
                         if (hadError)
                         {
-                            stockErrors++;
-                            var wait = GetBackoff(stockErrors);
-                            Console.Error.WriteLine($"[SCHEDULER] STOCK backoff {wait.TotalSeconds}s.");
-                            nextStockAttempt = now + wait;
+                            stockCaptureErrors++;
+                            var wait = GetBackoff(stockCaptureErrors);
+                            Console.Error.WriteLine($"[SCHEDULER] STOCK CAPTURE backoff {wait.TotalSeconds}s.");
+                            nextStockCaptureAttempt = now + wait;
                         }
                         else
                         {
-                            stockErrors = 0;
-                            nextStockAttempt = now + TimeSpan.FromSeconds(options.StockIntervalSeconds);
+                            stockCaptureErrors = 0;
+                            nextStockCaptureAttempt = now + TimeSpan.FromSeconds(options.StockIntervalSeconds);
                         }
                     }
 
                     now = GetUtcNow();
-                    if (now + tolerance >= nextProductAttempt && !ct.IsCancellationRequested)
+                    // 4. STOCK TRANSPORT
+                    if (now + tolerance >= nextStockTransportAttempt && !ct.IsCancellationRequested)
+                    {
+                        bool hadError = false;
+                        try { await stockService.SendPendingAsync(ct); }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[WARN] STOCK SYNC failure: {ex.Message}");
+                            hadError = true;
+                        }
+
+                        if (hadError)
+                        {
+                            stockTransportErrors++;
+                            var wait = GetBackoff(stockTransportErrors);
+                            Console.Error.WriteLine($"[SCHEDULER] STOCK SYNC backoff {wait.TotalSeconds}s.");
+                            nextStockTransportAttempt = now + wait;
+                        }
+                        else
+                        {
+                            stockTransportErrors = 0;
+                            nextStockTransportAttempt = now + transportIdleInterval;
+                        }
+                    }
+
+                    now = GetUtcNow();
+                    // 5. PRODUCTS CAPTURE
+                    if (now + tolerance >= nextProductCaptureAttempt && !ct.IsCancellationRequested)
                     {
                         bool hadError = false;
                         try { await productService.CaptureAsync(ct); }
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
                         {
-                            Console.Error.WriteLine($"[WARN] PRODUCTS capture failure: {ex.Message}");
-                            hadError = true;
-                        }
-
-                        try { await productService.SendPendingAsync(ct); }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception ex)
-                        {
-                            Console.Error.WriteLine($"[WARN] PRODUCTS transport failure: {ex.Message}");
+                            Console.Error.WriteLine($"[WARN] PRODUCTS CAPTURE failure: {ex.Message}");
                             hadError = true;
                         }
 
                         if (hadError)
                         {
-                            productErrors++;
-                            var wait = GetBackoff(productErrors);
-                            Console.Error.WriteLine($"[SCHEDULER] PRODUCTS backoff {wait.TotalSeconds}s.");
-                            nextProductAttempt = now + wait;
+                            productCaptureErrors++;
+                            var wait = GetBackoff(productCaptureErrors);
+                            Console.Error.WriteLine($"[SCHEDULER] PRODUCTS CAPTURE backoff {wait.TotalSeconds}s.");
+                            nextProductCaptureAttempt = now + wait;
                         }
                         else
                         {
-                            productErrors = 0;
-                            nextProductAttempt = now + TimeSpan.FromSeconds(options.ProductIntervalSeconds);
+                            productCaptureErrors = 0;
+                            nextProductCaptureAttempt = now + TimeSpan.FromSeconds(options.ProductIntervalSeconds);
+                        }
+                    }
+
+                    now = GetUtcNow();
+                    // 6. PRODUCTS TRANSPORT
+                    if (now + tolerance >= nextProductTransportAttempt && !ct.IsCancellationRequested)
+                    {
+                        bool hadError = false;
+                        try { await productService.SendPendingAsync(ct); }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[WARN] PRODUCTS SYNC failure: {ex.Message}");
+                            hadError = true;
+                        }
+
+                        if (hadError)
+                        {
+                            productTransportErrors++;
+                            var wait = GetBackoff(productTransportErrors);
+                            Console.Error.WriteLine($"[SCHEDULER] PRODUCTS SYNC backoff {wait.TotalSeconds}s.");
+                            nextProductTransportAttempt = now + wait;
+                        }
+                        else
+                        {
+                            productTransportErrors = 0;
+                            nextProductTransportAttempt = now + transportIdleInterval;
                         }
                     }
                 }

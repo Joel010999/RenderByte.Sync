@@ -298,7 +298,8 @@ public class ProductSnapshotTests
         // Lector falla (ej: error de conexión a mitad de lectura)
         reader.ShouldThrow = true;
 
-        await Assert.ThrowsAsync<Exception>(() => ProductsSyncOnceAgent.RunAsync("SRC", reader, Array.Empty<string>(), default, store, handler));
+        var result = await ProductsSyncOnceAgent.RunAsync("SRC", reader, Array.Empty<string>(), default, store, handler);
+        Assert.Equal(1, result);
 
         // No se debe haber creado un tombstone falsamente
         Assert.Empty(store.Outbox);

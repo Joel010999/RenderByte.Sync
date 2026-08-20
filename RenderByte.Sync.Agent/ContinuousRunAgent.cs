@@ -3,20 +3,26 @@ using System.Threading;
 using System.Threading.Tasks;
 using RenderByte.Sync.Contracts;
 using RenderByte.Sync.Core.Alegon;
-using RenderByte.Sync.Core.Alegon.Models;
+using RenderByte.Sync.Infrastructure.Alegon;
 using RenderByte.Sync.Persistence;
+using RenderByte.Sync.Agent.Services;
 
 namespace RenderByte.Sync.Agent;
 
 public static class ContinuousRunAgent
 {
-    // Función delegada para esperar (abstracción para tests)
     public static Func<TimeSpan, CancellationToken, Task> DelayTask { get; set; } = Task.Delay;
     public static Func<DateTimeOffset> GetUtcNow { get; set; } = () => DateTimeOffset.UtcNow;
 
-    public static async Task<int> RunAsync(SyncAgentOptions options, IAlegonReader reader, CancellationToken ct, HttpMessageHandler? httpHandler = null)
+    public static async Task<int> RunAsync(
+        SyncAgentOptions options, 
+        IAlegonReader reader, 
+        CancellationToken ct, 
+        HttpMessageHandler? httpHandler = null,
+        IProductReader? productReaderOverride = null,
+        IStockReader? stockReaderOverride = null)
     {
-        Console.WriteLine("[START] RenderByte Sync - Continuous Mode");
+        Console.WriteLine("[START] RenderByte Sync - Unified Continuous Mode");
         
         SyncInstanceGuard? guard = null;
         try
@@ -42,7 +48,7 @@ public static class ContinuousRunAgent
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[ERROR] No se pudo obtener branchId de Alegon: {ex.Message}");
-                return 1; // Fatal si no arranca
+                return 1;
             }
 
             try
@@ -55,26 +61,34 @@ public static class ContinuousRunAgent
                 return 2;
             }
 
-            var cpRow = await store.GetCheckpointAsync(ct);
-            if (cpRow == null)
+            Console.WriteLine($"[source] {options.SourceId}");
+            Console.WriteLine($"[branch] {branchId}");
+
+            var cp = await store.GetCheckpointAsync(ct);
+            if (cp == null)
             {
                 Console.Error.WriteLine("[ERROR] No hay checkpoint persistido. M7 no admite backfill histórico. Ejecute bootstrap primero.");
                 return 1;
             }
 
-            var checkpoint = cpRow.ToMovementCheckpoint();
-            Console.WriteLine($"[source] {options.SourceId}");
-            Console.WriteLine($"[branch] {branchId}");
-            Console.WriteLine($"[checkpoint] {checkpoint}");
-
             using var client = new HttpSyncClient(options.ApiUrl, options.ApiKey, httpHandler);
             var transport = new SyncTransportService(store, client, options.SourceId);
 
-            int alegonErrors = 0;
-            int httpErrors = 0;
-            
-            DateTimeOffset nextCaptureAttempt = DateTimeOffset.MinValue;
-            DateTimeOffset nextTransportAttempt = DateTimeOffset.MinValue;
+            var movementReader = reader;
+            var productReader = productReaderOverride ?? new AlegonProductReader(options.AlegonConnectionString);
+            var stockReader = stockReaderOverride ?? new AlegonStockReader(options.AlegonConnectionString);
+
+            var movementService = new MovementSyncService(movementReader, store, transport, branchId, options.ReadBatchSize, options.UploadBatchSize);
+            var productService = new ProductSyncService(productReader, store, client, options.SourceId, branchId);
+            var stockService = new StockSyncService(stockReader, store, client, options.SourceId, branchId);
+
+            DateTimeOffset nextMovementAttempt = DateTimeOffset.MinValue;
+            DateTimeOffset nextStockAttempt = DateTimeOffset.MinValue;
+            DateTimeOffset nextProductAttempt = DateTimeOffset.MinValue;
+
+            int movementErrors = 0;
+            int stockErrors = 0;
+            int productErrors = 0;
 
             try
             {
@@ -83,97 +97,119 @@ public static class ContinuousRunAgent
                     var now = GetUtcNow();
                     var tolerance = TimeSpan.FromMilliseconds(50);
                     
-                    TimeSpan captureDelay = now + tolerance < nextCaptureAttempt ? nextCaptureAttempt - now : TimeSpan.Zero;
-                    TimeSpan transportDelay = now + tolerance < nextTransportAttempt ? nextTransportAttempt - now : TimeSpan.Zero;
+                    TimeSpan delayMov = now + tolerance < nextMovementAttempt ? nextMovementAttempt - now : TimeSpan.Zero;
+                    TimeSpan delayStk = now + tolerance < nextStockAttempt ? nextStockAttempt - now : TimeSpan.Zero;
+                    TimeSpan delayPrd = now + tolerance < nextProductAttempt ? nextProductAttempt - now : TimeSpan.Zero;
                     
-                    TimeSpan minDelay = captureDelay < transportDelay ? captureDelay : transportDelay;
+                    TimeSpan minDelay = delayMov;
+                    if (delayStk < minDelay) minDelay = delayStk;
+                    if (delayPrd < minDelay) minDelay = delayPrd;
                     
                     if (minDelay > TimeSpan.Zero)
                     {
-                        if (alegonErrors == 0 && httpErrors == 0)
-                        {
-                            var humanSeconds = Math.Max(1, (int)Math.Round(minDelay.TotalSeconds));
-                            Console.WriteLine($"[idle] Sin novedades. Esperando {humanSeconds}s.");
-                        }
-                            
                         await DelayTask(minDelay, ct);
                         now = GetUtcNow();
                     }
 
-                    // 1. CAPTURE
-                    if (now + tolerance >= nextCaptureAttempt && !ct.IsCancellationRequested)
+                    // Priorities: 1. Movements, 2. Stock, 3. Products
+                    if (now + tolerance >= nextMovementAttempt && !ct.IsCancellationRequested)
                     {
-                        try
-                        {
-                            var movements = await reader.GetMovementsAfterAsync(branchId, checkpoint, options.ReadBatchSize, ct);
-                            if (movements.Count > 0)
-                            {
-                                var cpAfter = MovementCheckpoint.From(movements[^1]);
-                                var res = await store.PersistBatchAndCheckpointAsync(branchId, movements, cpAfter, ct);
-                                checkpoint = cpAfter; 
-
-                                Console.WriteLine($"[capture] {movements.Count} movimientos encontrados");
-                                Console.WriteLine($"[outbox] inserted={res.Inserted} duplicates={res.DuplicatesSkipped}");
-                                
-                                alegonErrors = 0;
-                                nextCaptureAttempt = now;
-                            }
-                            else
-                            {
-                                alegonErrors = 0;
-                                nextCaptureAttempt = now + TimeSpan.FromSeconds(options.PollSeconds);
-                            }
-                        }
+                        bool hadError = false;
+                        try { await movementService.CaptureAsync(ct); }
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
                         {
-                            alegonErrors++;
-                            var wait = GetBackoff(alegonErrors);
-                            Console.Error.WriteLine($"[WARN] SQL Server no disponible: {ex.Message}. Próximo intento capture en {wait.TotalSeconds}s.");
-                            nextCaptureAttempt = now + wait;
+                            Console.Error.WriteLine($"[WARN] MOVEMENTS capture failure: {ex.Message}");
+                            hadError = true;
+                        }
+
+                        try { await movementService.SendPendingAsync(ct); }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[WARN] MOVEMENTS transport failure: {ex.Message}");
+                            hadError = true;
+                        }
+
+                        if (hadError)
+                        {
+                            movementErrors++;
+                            var wait = GetBackoff(movementErrors);
+                            Console.Error.WriteLine($"[SCHEDULER] MOVEMENTS backoff {wait.TotalSeconds}s.");
+                            nextMovementAttempt = now + wait;
+                        }
+                        else
+                        {
+                            movementErrors = 0;
+                            nextMovementAttempt = now + TimeSpan.FromSeconds(options.MovementIntervalSeconds);
                         }
                     }
 
-                    // 2. SEND PENDING
-                    if (now + tolerance >= nextTransportAttempt && !ct.IsCancellationRequested)
+                    now = GetUtcNow();
+                    if (now + tolerance >= nextStockAttempt && !ct.IsCancellationRequested)
                     {
-                        try
-                        {
-                            var (success, sentCount) = await transport.SendPendingAsync(options.UploadBatchSize, ct);
-                            if (success)
-                            {
-                                httpErrors = 0;
-                                if (sentCount > 0)
-                                {
-                                    Console.WriteLine($"[sync] sending={sentCount}");
-                                    Console.WriteLine($"[sync] marked sent={sentCount}");
-                                    nextTransportAttempt = now;
-                                }
-                                else
-                                {
-                                    nextTransportAttempt = now + TimeSpan.FromSeconds(options.PollSeconds);
-                                }
-                            }
-                            else
-                            {
-                                httpErrors++;
-                                var wait = GetBackoff(httpErrors);
-                                Console.Error.WriteLine($"[WARN] Railway HTTP transitorio. Pending preservado. Próximo intento transport en {wait.TotalSeconds}s.");
-                                nextTransportAttempt = now + wait;
-                            }
-                        }
-                        catch (SyncApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized || ex.StatusCode == System.Net.HttpStatusCode.Forbidden || ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
-                        {
-                            Console.Error.WriteLine($"[ERROR] FATAL HTTP {(int)ex.StatusCode}. Agente detenido.");
-                            return 1;
-                        }
+                        bool hadError = false;
+                        try { await stockService.CaptureAsync(ct); }
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
                         {
-                            httpErrors++;
-                            var wait = GetBackoff(httpErrors);
-                            Console.Error.WriteLine($"[WARN] Error transporte: {ex.Message}. Próximo intento transport en {wait.TotalSeconds}s.");
-                            nextTransportAttempt = now + wait;
+                            Console.Error.WriteLine($"[WARN] STOCK capture failure: {ex.Message}");
+                            hadError = true;
+                        }
+
+                        try { await stockService.SendPendingAsync(ct); }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[WARN] STOCK transport failure: {ex.Message}");
+                            hadError = true;
+                        }
+
+                        if (hadError)
+                        {
+                            stockErrors++;
+                            var wait = GetBackoff(stockErrors);
+                            Console.Error.WriteLine($"[SCHEDULER] STOCK backoff {wait.TotalSeconds}s.");
+                            nextStockAttempt = now + wait;
+                        }
+                        else
+                        {
+                            stockErrors = 0;
+                            nextStockAttempt = now + TimeSpan.FromSeconds(options.StockIntervalSeconds);
+                        }
+                    }
+
+                    now = GetUtcNow();
+                    if (now + tolerance >= nextProductAttempt && !ct.IsCancellationRequested)
+                    {
+                        bool hadError = false;
+                        try { await productService.CaptureAsync(ct); }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[WARN] PRODUCTS capture failure: {ex.Message}");
+                            hadError = true;
+                        }
+
+                        try { await productService.SendPendingAsync(ct); }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[WARN] PRODUCTS transport failure: {ex.Message}");
+                            hadError = true;
+                        }
+
+                        if (hadError)
+                        {
+                            productErrors++;
+                            var wait = GetBackoff(productErrors);
+                            Console.Error.WriteLine($"[SCHEDULER] PRODUCTS backoff {wait.TotalSeconds}s.");
+                            nextProductAttempt = now + wait;
+                        }
+                        else
+                        {
+                            productErrors = 0;
+                            nextProductAttempt = now + TimeSpan.FromSeconds(options.ProductIntervalSeconds);
                         }
                     }
                 }

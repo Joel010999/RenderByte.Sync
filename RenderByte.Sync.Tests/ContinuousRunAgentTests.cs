@@ -96,7 +96,10 @@ public class ContinuousRunAgentTests : IDisposable
         using var cts = new CancellationTokenSource();
         var mockHttp = new MockHttpMessageHandler();
 
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp);
+        var productReaderMock = new Mock<IProductReader>();
+        var stockReaderMock = new Mock<IStockReader>();
+
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productReaderMock.Object, stockReaderMock.Object);
         
         // Let it start and then cancel
         await Task.Delay(100);
@@ -118,7 +121,10 @@ public class ContinuousRunAgentTests : IDisposable
         var readerMock = new Mock<IAlegonReader>();
         readerMock.Setup(r => r.GetBranchNumberAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
-        var exitCode = await ContinuousRunAgent.RunAsync(_options, readerMock.Object, CancellationToken.None);
+        var productReaderMock = new Mock<IProductReader>();
+        var stockReaderMock = new Mock<IStockReader>();
+
+        var exitCode = await ContinuousRunAgent.RunAsync(_options, readerMock.Object, CancellationToken.None, null, productReaderMock.Object, stockReaderMock.Object);
         Assert.Equal(2, exitCode);
     }
 
@@ -133,7 +139,10 @@ public class ContinuousRunAgentTests : IDisposable
         var readerMock = new Mock<IAlegonReader>();
         readerMock.Setup(r => r.GetBranchNumberAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
-        var exitCode = await ContinuousRunAgent.RunAsync(_options, readerMock.Object, CancellationToken.None);
+        var productReaderMock = new Mock<IProductReader>();
+        var stockReaderMock = new Mock<IStockReader>();
+
+        var exitCode = await ContinuousRunAgent.RunAsync(_options, readerMock.Object, CancellationToken.None, null, productReaderMock.Object, stockReaderMock.Object);
         Assert.Equal(1, exitCode);
     }
 
@@ -179,7 +188,10 @@ public class ContinuousRunAgentTests : IDisposable
         };
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp);
+        var productReaderMock = new Mock<IProductReader>();
+        var stockReaderMock = new Mock<IStockReader>();
+
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productReaderMock.Object, stockReaderMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -229,7 +241,10 @@ public class ContinuousRunAgentTests : IDisposable
         };
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp);
+        var productReaderMock = new Mock<IProductReader>();
+        var stockReaderMock = new Mock<IStockReader>();
+
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productReaderMock.Object, stockReaderMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -275,7 +290,10 @@ public class ContinuousRunAgentTests : IDisposable
         };
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp);
+        var productReaderMock = new Mock<IProductReader>();
+        var stockReaderMock = new Mock<IStockReader>();
+
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productReaderMock.Object, stockReaderMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -304,7 +322,10 @@ public class ContinuousRunAgentTests : IDisposable
         var readerMock = new Mock<IAlegonReader>();
         readerMock.Setup(r => r.GetBranchNumberAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1); // Alegon returns 1
 
-        var exitCode = await ContinuousRunAgent.RunAsync(_options, readerMock.Object, CancellationToken.None);
+        var productReaderMock = new Mock<IProductReader>();
+        var stockReaderMock = new Mock<IStockReader>();
+
+        var exitCode = await ContinuousRunAgent.RunAsync(_options, readerMock.Object, CancellationToken.None, null, productReaderMock.Object, stockReaderMock.Object);
         Assert.Equal(2, exitCode); // InvalidOperationException for mismatch
     }
 
@@ -325,7 +346,10 @@ public class ContinuousRunAgentTests : IDisposable
         var mockHttp = new MockHttpMessageHandler();
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp);
+        var productReaderMock = new Mock<IProductReader>();
+        var stockReaderMock = new Mock<IStockReader>();
+
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productReaderMock.Object, stockReaderMock.Object);
         
         cts.Cancel(); // Immediate cancel
         
@@ -368,7 +392,10 @@ public class ContinuousRunAgentTests : IDisposable
         };
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp);
+        var productReaderMock = new Mock<IProductReader>();
+        var stockReaderMock = new Mock<IStockReader>();
+
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productReaderMock.Object, stockReaderMock.Object);
         
         while (delaysRequested.Count < 3) { await Task.Delay(50); }
         cts.Cancel();

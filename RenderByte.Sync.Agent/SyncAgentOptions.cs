@@ -9,7 +9,10 @@ public record SyncAgentOptions(
     string ApiKey,
     int ReadBatchSize = 100,
     int UploadBatchSize = 200,
-    int PollSeconds = 60)
+    int PollSeconds = 60,
+    int MovementIntervalSeconds = 60,
+    int StockIntervalSeconds = 300,
+    int ProductIntervalSeconds = 3600)
 {
     public static SyncAgentOptions FromEnvironment()
     {
@@ -34,7 +37,10 @@ public record SyncAgentOptions(
             ApiKey: apiKey,
             ReadBatchSize: GetIntEnv("RENDERBYTE_SYNC_READ_BATCH_SIZE", 100, 1, 1000),
             UploadBatchSize: GetIntEnv("RENDERBYTE_SYNC_UPLOAD_BATCH_SIZE", 200, 1, 5000),
-            PollSeconds: GetIntEnv("RENDERBYTE_SYNC_POLL_SECONDS", 60, 5, 3600)
+            PollSeconds: GetIntEnv("RENDERBYTE_SYNC_POLL_SECONDS", 60, 5, 3600),
+            MovementIntervalSeconds: GetIntEnv("RENDERBYTE_SYNC_MOVEMENTS_SECONDS", 60, 30, 3600),
+            StockIntervalSeconds: GetIntEnv("RENDERBYTE_SYNC_STOCK_SECONDS", 300, 60, 86400),
+            ProductIntervalSeconds: GetIntEnv("RENDERBYTE_SYNC_PRODUCTS_SECONDS", 3600, 300, 86400)
         );
     }
 

@@ -35,10 +35,18 @@ public class AlegonProductReaderTests
     }
 
     [Fact]
-    public void ProductReader_TrimsCharPadding()
+    public void ProductReader_TrimsLeadingAndTrailingPadding()
     {
         var source = File.ReadAllText(SourceFilePath);
-        Assert.Contains("GetString(i).TrimEnd()", source);
+        Assert.DoesNotContain("GetString(i).TrimEnd()", source);
+        Assert.Contains("GetString(i).Trim()", source);
+    }
+
+    [Fact]
+    public void ProductReader_NullStringRemainsNull()
+    {
+        var source = File.ReadAllText(SourceFilePath);
+        Assert.Contains("r.IsDBNull(i) ? null : r.GetString(i).Trim()", source);
     }
 
     [Fact]
@@ -102,15 +110,15 @@ public class AlegonProductReaderTests
         Assert.Equal(123, product.ArticleId);
         Assert.Equal("Marca", product.Marca); // Trimeado
         Assert.Equal("Desc", product.Descripcion); // Trimeado
-        Assert.Equal(10.5m, product.CostoImpositivo);
+        Assert.Equal(10.5m, product.Cossimp);
         Assert.Equal(101, product.CuentaCompra);
         Assert.Equal(102, product.CuentaVenta);
-        Assert.Equal(1001, product.IdSubRubro);
-        Assert.Equal(2002, product.IdProducto);
+        Assert.Equal(1001, product.IdsBArt);
+        Assert.Equal(2002, product.IdProd);
         Assert.Equal((byte)1, product.Estado);
-        Assert.True(product.BultoEnvase);
-        Assert.Equal(1.0m, product.NumeroAsocEnvase);
-        Assert.False(product.BultoPesable);
-        Assert.Equal(DateTimeKind.Unspecified, product.FechaActualizacion!.Value.Kind);
+        Assert.True(product.Benvase);
+        Assert.Equal(1.0m, product.Nasocenv);
+        Assert.False(product.Bpesable);
+        Assert.Equal(DateTimeKind.Unspecified, product.Factu!.Value.Kind);
     }
 }

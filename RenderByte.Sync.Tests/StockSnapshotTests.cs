@@ -1,0 +1,83 @@
+
+using RenderByte.Sync.Agent;
+using RenderByte.Sync.Core.Alegon;
+using RenderByte.Sync.Core.Alegon.Models;
+using RenderByte.Sync.Persistence;
+using System.Text.Json;
+using Xunit;
+
+namespace RenderByte.Sync.Tests;
+
+public class StockSnapshotTests
+{
+    private class FakeStockReader : IStockReader
+    {
+        public List<AlegonStock> StocksToReturn { get; set; } = new();
+
+        public Task<IReadOnlyList<AlegonStock>> GetFullSnapshotAsync(int branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<AlegonStock>>(StocksToReturn);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_ShouldInsertNewStocksToOutbox()
+    {
+        var sourceId = "TEST_SRC";
+        var reader = new FakeStockReader();
+        reader.StocksToReturn.Add(new AlegonStock(1, 10, "UN", 10.5m, 20m, 5m, null));
+
+        var dbPath = Path.GetTempFileName();
+        try
+        {
+            await using var store = new SqliteSyncBatchStore(dbPath);
+            await store.InitializeAsync(sourceId, 1000, CancellationToken.None);
+
+            await StocksSyncOnceAgent.RunAsync(sourceId, reader, new string[0], CancellationToken.None, store);
+
+            var pending = await store.GetPendingStockOutboxAsync(100);
+            Assert.Single(pending);
+            Assert.Equal(10, pending[0].ArticleId);
+            Assert.True(pending[0].IsPresent);
+        }
+        finally
+        {
+            try { File.Delete(dbPath); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_ShouldTombstoneMissingStocks()
+    {
+        var sourceId = "TEST_SRC";
+        var reader = new FakeStockReader();
+        
+        var dbPath = Path.GetTempFileName();
+        try
+        {
+            await using var store = new SqliteSyncBatchStore(dbPath);
+            await store.InitializeAsync(sourceId, 1000, CancellationToken.None);
+
+            var existingStock = new AlegonStock(1, 10, "UN", 10.5m, 20m, 5m, null);
+            var bizKey = StockCanonicalizer.ComputeBusinessKey(sourceId, 1, 10, "UN");
+            var hash = StockCanonicalizer.ComputeContentHash(existingStock, isPresent: true);
+            await store.UpsertStockStateAndOutboxAsync(sourceId, 1, existingStock, bizKey, hash, JsonSerializer.Serialize(existingStock));
+            
+            var pending1 = await store.GetPendingStockOutboxAsync(100);
+            foreach (var p in pending1) await store.MarkStockOutboxSentAsync(p.Id);
+
+            // Now reader returns empty. Run agent.
+            await StocksSyncOnceAgent.RunAsync(sourceId, reader, new string[0], CancellationToken.None, store);
+
+            var pending2 = await store.GetPendingStockOutboxAsync(100);
+            Assert.Single(pending2);
+            Assert.Equal(10, pending2[0].ArticleId);
+            Assert.False(pending2[0].IsPresent); // Tombstone
+            Assert.Equal("TOMBSTONE", pending2[0].ContentHash);
+        }
+        finally
+        {
+            try { File.Delete(dbPath); } catch { }
+        }
+    }
+}

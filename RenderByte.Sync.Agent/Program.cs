@@ -57,7 +57,7 @@ var command = args.Length > 0 ? args[0].ToLowerInvariant() : string.Empty;
 
 // ── Comandos mutantes: adquirir Single Instance Guard ─────────────────────────
 var mutatingCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    { "outbox-test", "checkpoint-test", "batch-test", "run", "products-sync-once" };
+    { "outbox-test", "checkpoint-test", "batch-test", "run", "products-sync-once", "stocks-sync-once" };
 
 SyncInstanceGuard? guard = null;
 if (mutatingCommands.Contains(command))
@@ -109,6 +109,9 @@ try
 
         "products-sync-once" =>
             await ProductsSyncOnceAgent.RunAsync(sourceId, new AlegonProductReader(connectionString), args.Length > 1 ? args[1..] : Array.Empty<string>(), cts.Token),
+
+        "stocks-sync-once" =>
+            await StocksSyncOnceAgent.RunAsync(sourceId, new AlegonStockReader(connectionString), args.Length > 1 ? args[1..] : Array.Empty<string>(), cts.Token),
 
         // Sin argumento o cualquier otro → health-check (comportamiento original intacto)
         _ =>

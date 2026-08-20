@@ -274,5 +274,147 @@ public static class SyncEndpoints
                 return Results.Problem("Error interno guardando los productos.", statusCode: 500);
             }
         });
+
+        app.MapPost("/v1/sync/stocks", async (
+            HttpContext context,
+            SyncStockBatchRequest? request,
+            IConfiguration config) =>
+        {
+            if (request == null || request.Stocks == null || !request.Stocks.Any())
+            {
+                return Results.BadRequest(new SyncErrorResponse("INVALID_PAYLOAD", "Payload vacío o inválido.", request?.BatchId, null));
+            }
+
+            if (request.Stocks.Count > 1000)
+            {
+                return Results.BadRequest(new SyncErrorResponse("INVALID_PAYLOAD", "El batch excede el límite de 1000 stocks.", request.BatchId, null));
+            }
+
+            var authContext = context.Items["SyncAuthContext"] as SyncAuthContext;
+            if (authContext == null || authContext.SourceId != request.SourceId)
+            {
+                return Results.Json(new SyncErrorResponse("SOURCE_MISMATCH", "El source_id del request no corresponde a las credenciales presentadas.", request.BatchId, null), statusCode: 403);
+            }
+
+            var connectionString = config.GetConnectionString("DefaultConnection");
+
+            var mandatoryErrors = new List<string>();
+            foreach (var stock in request.Stocks)
+            {
+                if (string.IsNullOrWhiteSpace(stock.BusinessKey) || string.IsNullOrWhiteSpace(stock.ContentHash) || stock.ArticleId <= 0 || string.IsNullOrWhiteSpace(stock.Bulto))
+                {
+                    mandatoryErrors.Add($"Stock inválido en batch (ArticleId: {stock.ArticleId}, Bulto: {stock.Bulto}).");
+                }
+            }
+
+            if (mandatoryErrors.Any())
+            {
+                return Results.BadRequest(new SyncErrorResponse("INVALID_PAYLOAD", "Errores de validación en el batch.", request.BatchId, null));
+            }
+
+            await using var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+
+            int inserted = 0;
+            int updated = 0;
+            int unchanged = 0;
+
+            try
+            {
+                var selectSql = "SELECT content_hash FROM stock_raw WHERE source_id = @SourceId AND branch_id = @BranchId AND article_id = @ArticleId AND bulto = @Bulto;";
+                var insertSql = @"
+                    INSERT INTO stock_raw (
+                        organization_id, source_id, branch_id, article_id, bulto, business_key, content_hash, payload, is_present
+                    ) VALUES (
+                        @OrganizationId, @SourceId, @BranchId, @ArticleId, @Bulto, @BusinessKey, @ContentHash, @Payload::JSONB, @IsPresent
+                    );";
+                var updateSql = @"
+                    UPDATE stock_raw SET
+                        business_key = @BusinessKey,
+                        content_hash = @ContentHash,
+                        payload = @Payload::JSONB,
+                        is_present = @IsPresent,
+                        source_seen_at = NOW()
+                    WHERE source_id = @SourceId AND branch_id = @BranchId AND article_id = @ArticleId AND bulto = @Bulto;";
+
+                foreach (var stock in request.Stocks)
+                {
+                    bool isTombstone = stock.ContentHash == "TOMBSTONE";
+
+                    var existingHash = await connection.ExecuteScalarAsync<string>(selectSql, new
+                    {
+                        SourceId = authContext.SourceId,
+                        BranchId = request.BranchId,
+                        ArticleId = stock.ArticleId,
+                        Bulto = stock.Bulto
+                    }, transaction);
+
+                    var payloadObj = new
+                    {
+                        stock.Costo,
+                        stock.Precio,
+                        stock.Saldo,
+                        stock.Piezas
+                    };
+                    string payloadJson = JsonSerializer.Serialize(payloadObj);
+
+                    if (existingHash == null)
+                    {
+                        await connection.ExecuteAsync(insertSql, new
+                        {
+                            OrganizationId = authContext.OrganizationId,
+                            SourceId = authContext.SourceId,
+                            BranchId = request.BranchId,
+                            ArticleId = stock.ArticleId,
+                            Bulto = stock.Bulto,
+                            BusinessKey = stock.BusinessKey,
+                            ContentHash = stock.ContentHash,
+                            Payload = isTombstone ? "{}" : payloadJson,
+                            IsPresent = !isTombstone
+                        }, transaction);
+                        inserted++;
+                    }
+                    else if (existingHash != stock.ContentHash)
+                    {
+                        await connection.ExecuteAsync(updateSql, new
+                        {
+                            SourceId = authContext.SourceId,
+                            BranchId = request.BranchId,
+                            ArticleId = stock.ArticleId,
+                            Bulto = stock.Bulto,
+                            BusinessKey = stock.BusinessKey,
+                            ContentHash = stock.ContentHash,
+                            Payload = isTombstone ? "{}" : payloadJson,
+                            IsPresent = !isTombstone
+                        }, transaction);
+                        updated++;
+                    }
+                    else
+                    {
+                        unchanged++;
+                    }
+                }
+
+                await transaction.CommitAsync();
+
+                var response = new SyncStockBatchResponse
+                {
+                    BatchId = request.BatchId,
+                    Accepted = request.Stocks.Count,
+                    Inserted = inserted,
+                    Updated = updated,
+                    Unchanged = unchanged,
+                    ReceivedAt = DateTimeOffset.UtcNow.DateTime
+                };
+
+                return Results.Ok(response);
+            }
+            catch (Exception)
+            {
+                await transaction.RollbackAsync();
+                return Results.Problem("Error interno guardando los stocks.", statusCode: 500);
+            }
+        });
     }
 }

@@ -18,7 +18,7 @@ namespace RenderByte.Sync.Persistence;
 ///   <item>v3 → v4: crea <c>product_state</c> y <c>product_outbox</c> para M8.1.</item>
 /// </list>
 /// </remarks>
-public sealed class SqliteSyncBatchStore : ISyncBatchStore, IProductStore
+public sealed class SqliteSyncBatchStore : ISyncBatchStore, IProductStore, IStockStore
 {
     // ─── Schema v1 ───────────────────────────────────────────────────────────────
 
@@ -121,6 +121,48 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore, IProductStore
 
         CREATE UNIQUE INDEX IF NOT EXISTS uidx_product_outbox_pending
         ON product_outbox (source_id, article_id, content_hash)
+        WHERE status = 'pending';
+        """;
+
+    // ─── Schema v5 (Stocks M9) ────────────────────────────────────────────────────
+
+    private const string SchemaSqlV5_Stocks = """
+        CREATE TABLE IF NOT EXISTS stock_state (
+            source_id       TEXT    NOT NULL,
+            depo            INTEGER NOT NULL,
+            article_id      INTEGER NOT NULL,
+            bulto           TEXT    NOT NULL,
+            business_key    TEXT    NOT NULL,
+            content_hash    TEXT    NOT NULL,
+            last_seen_at    TEXT    NOT NULL,
+            last_changed_at TEXT    NOT NULL,
+            is_present      INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (source_id, depo, article_id, bulto)
+        );
+
+        CREATE TABLE IF NOT EXISTS stock_outbox (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id       TEXT    NOT NULL,
+            branch_id       INTEGER NOT NULL,
+            business_key    TEXT    NOT NULL,
+            depo            INTEGER NOT NULL,
+            article_id      INTEGER NOT NULL,
+            bulto           TEXT    NOT NULL,
+            content_hash    TEXT    NOT NULL,
+            costo           TEXT,
+            precio          TEXT,
+            saldo           TEXT,
+            piezas          TEXT,
+            is_present      INTEGER NOT NULL,
+            status          TEXT    NOT NULL DEFAULT 'pending',
+            retry_count     INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT    NOT NULL,
+            sent_at         TEXT,
+            last_error      TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS uidx_stock_outbox_pending
+        ON stock_outbox (source_id, depo, article_id, bulto, content_hash)
         WHERE status = 'pending';
         """;
 
@@ -483,6 +525,13 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore, IProductStore
             await RunNonQueryAsync(SchemaSqlV4_Products, ct);
             await RunNonQueryAsync("PRAGMA user_version = 4;", ct);
             version = 4;
+        }
+
+        if (version < 5)
+        {
+            await RunNonQueryAsync(SchemaSqlV5_Stocks, ct);
+            await RunNonQueryAsync("PRAGMA user_version = 5;", ct);
+            version = 5;
         }
     }
 
@@ -888,6 +937,232 @@ public sealed class SqliteSyncBatchStore : ISyncBatchStore, IProductStore
 
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = "UPDATE product_outbox SET retry_count = retry_count + 1, last_error = @error WHERE id = @id;";
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.AddWithValue("@error", error);
+
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<long> GetPendingOutboxCountAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM stock_outbox WHERE status = 'pending';";
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        return result is long l ? l : Convert.ToInt64(result);
+    }
+
+    public async Task<IReadOnlyDictionary<string, StockState>> GetStockStatesAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        var states = new Dictionary<string, StockState>();
+
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = "SELECT business_key, depo, article_id, bulto, content_hash, is_present FROM stock_state WHERE source_id = @sourceId;";
+        cmd.Parameters.AddWithValue("@sourceId", _sourceId);
+
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var key = reader.GetString(0);
+            var state = new StockState(
+                BusinessKey: key,
+                Depo: reader.GetInt32(1),
+                ArticleId: reader.GetInt32(2),
+                Bulto: reader.GetString(3),
+                ContentHash: reader.GetString(4),
+                IsPresent: reader.GetInt32(5) != 0
+            );
+            states[key] = state;
+        }
+
+        return states;
+    }
+
+    public async Task UpsertStockStateAndOutboxAsync(
+        string sourceId,
+        int branchId,
+        AlegonStock stock,
+        string businessKey,
+        string contentHash,
+        string payloadJson,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        await using var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
+        var nowStr = DateTime.UtcNow.ToString(MovementCanonicalizer.UtcTimestampFormat, CultureInfo.InvariantCulture);
+
+        string? ConvertDecimal(decimal? v) => v?.ToString(CultureInfo.InvariantCulture);
+
+        try
+        {
+            // 1. Upsert State
+            using var cmdState = _connection.CreateCommand();
+            cmdState.Transaction = (SqliteTransaction)transaction;
+            cmdState.CommandText = """
+                INSERT INTO stock_state (source_id, depo, article_id, bulto, business_key, content_hash, last_seen_at, last_changed_at, is_present)
+                VALUES (@sourceId, @depo, @articleId, @bulto, @businessKey, @contentHash, @now, @now, 1)
+                ON CONFLICT(source_id, depo, article_id, bulto) DO UPDATE SET
+                    content_hash = excluded.content_hash,
+                    last_seen_at = excluded.last_seen_at,
+                    last_changed_at = excluded.last_changed_at,
+                    is_present = 1;
+                """;
+            cmdState.Parameters.AddWithValue("@sourceId", sourceId);
+            cmdState.Parameters.AddWithValue("@depo", stock.Depo);
+            cmdState.Parameters.AddWithValue("@articleId", stock.ArticleId);
+            cmdState.Parameters.AddWithValue("@bulto", stock.Bulto);
+            cmdState.Parameters.AddWithValue("@businessKey", businessKey);
+            cmdState.Parameters.AddWithValue("@contentHash", contentHash);
+            cmdState.Parameters.AddWithValue("@now", nowStr);
+            await cmdState.ExecuteNonQueryAsync(cancellationToken);
+
+            // 2. Insert Outbox
+            using var cmdOutbox = _connection.CreateCommand();
+            cmdOutbox.Transaction = (SqliteTransaction)transaction;
+            cmdOutbox.CommandText = """
+                INSERT INTO stock_outbox (source_id, depo, article_id, bulto, business_key, content_hash, costo, precio, saldo, piezas, is_present, status, retry_count, created_at)
+                VALUES (@sourceId, @depo, @articleId, @bulto, @businessKey, @contentHash, @costo, @precio, @saldo, @piezas, 1, 'pending', 0, @now)
+                ON CONFLICT(source_id, depo, article_id, bulto, content_hash) WHERE status = 'pending' DO NOTHING;
+                """;
+            cmdOutbox.Parameters.AddWithValue("@sourceId", sourceId);
+            cmdOutbox.Parameters.AddWithValue("@depo", stock.Depo);
+            cmdOutbox.Parameters.AddWithValue("@articleId", stock.ArticleId);
+            cmdOutbox.Parameters.AddWithValue("@bulto", stock.Bulto);
+            cmdOutbox.Parameters.AddWithValue("@businessKey", businessKey);
+            cmdOutbox.Parameters.AddWithValue("@contentHash", contentHash);
+            cmdOutbox.Parameters.AddWithValue("@costo", (object?)ConvertDecimal(stock.Costo) ?? DBNull.Value);
+            cmdOutbox.Parameters.AddWithValue("@precio", (object?)ConvertDecimal(stock.Precio) ?? DBNull.Value);
+            cmdOutbox.Parameters.AddWithValue("@saldo", (object?)ConvertDecimal(stock.Saldo) ?? DBNull.Value);
+            cmdOutbox.Parameters.AddWithValue("@piezas", (object?)ConvertDecimal(stock.Piezas) ?? DBNull.Value);
+            cmdOutbox.Parameters.AddWithValue("@now", nowStr);
+            await cmdOutbox.ExecuteNonQueryAsync(cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task MarkStockMissingAndCreateTombstoneAsync(
+        string sourceId,
+        int branchId,
+        string businessKey,
+        int depo,
+        int articleId,
+        string bulto,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        await using var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
+        var nowStr = DateTime.UtcNow.ToString(MovementCanonicalizer.UtcTimestampFormat, CultureInfo.InvariantCulture);
+
+        try
+        {
+            // 1. Update State
+            using var cmdState = _connection.CreateCommand();
+            cmdState.Transaction = (SqliteTransaction)transaction;
+            cmdState.CommandText = "UPDATE stock_state SET is_present = 0, last_changed_at = @now, last_seen_at = @now WHERE business_key = @businessKey;";
+            cmdState.Parameters.AddWithValue("@businessKey", businessKey);
+            cmdState.Parameters.AddWithValue("@now", nowStr);
+            var affected = await cmdState.ExecuteNonQueryAsync(cancellationToken);
+
+            if (affected > 0)
+            {
+                // 2. Insert Outbox (Tombstone)
+                using var cmdOutbox = _connection.CreateCommand();
+                cmdOutbox.Transaction = (SqliteTransaction)transaction;
+                cmdOutbox.CommandText = """
+                    INSERT INTO stock_outbox (source_id, depo, article_id, bulto, business_key, content_hash, is_present, status, retry_count, created_at)
+                    VALUES (@sourceId, @depo, @articleId, @bulto, @businessKey, 'TOMBSTONE', 0, 'pending', 0, @now)
+                    ON CONFLICT(source_id, depo, article_id, bulto, content_hash) WHERE status = 'pending' DO NOTHING;
+                    """;
+                cmdOutbox.Parameters.AddWithValue("@sourceId", sourceId);
+                cmdOutbox.Parameters.AddWithValue("@depo", depo);
+                cmdOutbox.Parameters.AddWithValue("@articleId", articleId);
+                cmdOutbox.Parameters.AddWithValue("@bulto", bulto);
+                cmdOutbox.Parameters.AddWithValue("@businessKey", businessKey);
+                cmdOutbox.Parameters.AddWithValue("@now", nowStr);
+                await cmdOutbox.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<StockOutboxMessage>> GetPendingStockOutboxAsync(int limit, CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, business_key, depo, article_id, bulto, content_hash, costo, precio, saldo, piezas, is_present, status, retry_count
+            FROM stock_outbox
+            WHERE status = 'pending' AND source_id = @sourceId
+            ORDER BY id ASC
+            LIMIT @limit;
+            """;
+        cmd.Parameters.AddWithValue("@sourceId", _sourceId);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        var result = new List<StockOutboxMessage>();
+
+        decimal? ParseDecimal(string? s) => s is null ? null : decimal.Parse(s, CultureInfo.InvariantCulture);
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new StockOutboxMessage(
+                Id: reader.GetInt64(0),
+                BusinessKey: reader.GetString(1),
+                Depo: reader.GetInt32(2),
+                ArticleId: reader.GetInt32(3),
+                Bulto: reader.GetString(4),
+                ContentHash: reader.GetString(5),
+                Costo: reader.IsDBNull(6) ? null : ParseDecimal(reader.GetString(6)),
+                Precio: reader.IsDBNull(7) ? null : ParseDecimal(reader.GetString(7)),
+                Saldo: reader.IsDBNull(8) ? null : ParseDecimal(reader.GetString(8)),
+                Piezas: reader.IsDBNull(9) ? null : ParseDecimal(reader.GetString(9)),
+                IsPresent: reader.GetInt32(10) != 0,
+                Status: reader.GetString(11),
+                RetryCount: reader.GetInt32(12)
+            ));
+        }
+
+        return result;
+    }
+
+    public async Task MarkStockOutboxSentAsync(long id, CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+        var nowStr = DateTime.UtcNow.ToString(MovementCanonicalizer.UtcTimestampFormat, CultureInfo.InvariantCulture);
+
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = "UPDATE stock_outbox SET status = 'sent', sent_at = @now, last_error = NULL WHERE id = @id;";
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.AddWithValue("@now", nowStr);
+
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task MarkStockOutboxErrorAsync(long id, string error, CancellationToken cancellationToken = default)
+    {
+        ThrowIfNotInitialized();
+
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = "UPDATE stock_outbox SET retry_count = retry_count + 1, last_error = @error WHERE id = @id;";
         cmd.Parameters.AddWithValue("@id", id);
         cmd.Parameters.AddWithValue("@error", error);
 

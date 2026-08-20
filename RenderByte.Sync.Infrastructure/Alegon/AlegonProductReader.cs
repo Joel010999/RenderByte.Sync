@@ -171,35 +171,35 @@ public sealed class AlegonProductReader : IProductReader
                 Descripcion:            ReadStringNullableTrimmed(reader, ordDescri),
                 UnidadMedida:           ReadStringNullableTrimmed(reader, ordUnimed),
                 Bulto:                  ReadStringNullableTrimmed(reader, ordBulto),
-                TipoImpuesto:           ReadStringNullableTrimmed(reader, ordTimpu),
+                Timpu:                  ReadStringNullableTrimmed(reader, ordTimpu),
                 Clasificacion:          ReadStringNullableTrimmed(reader, ordClasif),
                 Proveedor:              ReadStringNullableTrimmed(reader, ordProvee),
                 ArticuloProveedor:      ReadStringNullableTrimmed(reader, ordArtprov),
-                CostoImpositivo:        ReadDecimalNullable(reader, ordCossimp),
-                CostoVenta:             ReadDecimalNullable(reader, ordCossvta),
-                FechaActualizacion:     ReadDateTimeUnspecifiedNullable(reader, ordFactu),
-                StockOptimo:            ReadDecimalNullable(reader, ordStopti),
-                PuntoPedido:            ReadDecimalNullable(reader, ordPtoped),
+                Cossimp:                ReadDecimalNullable(reader, ordCossimp),
+                Cossvta:                ReadDecimalNullable(reader, ordCossvta),
+                Factu:                  ReadDateTimeUnspecifiedNullable(reader, ordFactu),
+                Stopti:                 ReadDecimalNullable(reader, ordStopti),
+                Ptoped:                 ReadDecimalNullable(reader, ordPtoped),
                 Ubicacion:              ReadStringNullableTrimmed(reader, ordUbicacion),
                 HabilitadoCompra:       ReadBoolNullable(reader, ordHabcpa),
                 HabilitadoVenta:        ReadBoolNullable(reader, ordHabvta),
-                Cotizacion:             ReadStringNullableTrimmed(reader, ordCotiza),
+                Cotiza:                 ReadStringNullableTrimmed(reader, ordCotiza),
                 CuentaCompra:           ReadInt32Nullable(reader, ordCuencpa),
                 CuentaVenta:            ReadInt32Nullable(reader, ordCuenvta),
                 DescuentoMaximo:        ReadDecimalNullable(reader, ordDctoMax),
-                IdSubRubro:             ReadInt32Nullable(reader, ordIdsBArt),
-                IdProducto:             ReadInt32Nullable(reader, ordIdProd),
+                IdsBArt:                ReadInt32Nullable(reader, ordIdsBArt),
+                IdProd:                 ReadInt32Nullable(reader, ordIdProd),
                 Estado:                 ReadByteNullable(reader, ordEstado),
-                EsquemaCalculo:         ReadStringNullableTrimmed(reader, ordEsqucalc),
-                BultoEnvase:            ReadBoolNullable(reader, ordBenvase),
-                NumeroAsocEnvase:       ReadDecimalNullable(reader, ordNasocenv),
-                BultoPesable:           ReadBoolNullable(reader, ordBpesable),
+                Esqucalc:               ReadStringNullableTrimmed(reader, ordEsqucalc),
+                Benvase:                ReadBoolNullable(reader, ordBenvase),
+                Nasocenv:               ReadDecimalNullable(reader, ordNasocenv),
+                Bpesable:               ReadBoolNullable(reader, ordBpesable),
                 RutaFoto:               ReadStringNullableTrimmed(reader, ordCfoto),
                 Comision:               ReadDecimalNullable(reader, ordComision),
-                DiasVencimiento:        ReadDecimalNullable(reader, ordNdiasvct),
-                MinimoMayorista:        ReadDecimalNullable(reader, ordNMinMay),
-                VigenciaMayoristaDesde: ReadDateTimeUnspecifiedNullable(reader, ordDVigMayd),
-                VigenciaMayoristaHasta: ReadDateTimeUnspecifiedNullable(reader, ordDVigMayh)
+                Ndiasvct:               ReadDecimalNullable(reader, ordNdiasvct),
+                NMinMay:                ReadDecimalNullable(reader, ordNMinMay),
+                DVigMayd:               ReadDateTimeUnspecifiedNullable(reader, ordDVigMayd),
+                DVigMayh:               ReadDateTimeUnspecifiedNullable(reader, ordDVigMayh)
             );
         }
         catch (InvalidCastException ex)
@@ -224,7 +224,7 @@ public sealed class AlegonProductReader : IProductReader
 
     private static string? ReadStringNullableTrimmed(DbDataReader r, int i)
     {
-        try { return r.IsDBNull(i) ? null : r.GetString(i).TrimEnd(); }
+        try { return r.IsDBNull(i) ? null : r.GetString(i).Trim(); }
         catch (InvalidCastException ex) { throw CreateMappingException(r, i, "String", ex); }
     }
 

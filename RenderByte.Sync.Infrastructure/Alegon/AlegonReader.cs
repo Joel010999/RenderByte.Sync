@@ -232,13 +232,13 @@ public sealed class AlegonReader : IAlegonReader
         while (await reader.ReadAsync(cancellationToken))
         {
             results.Add(new AlegonStock(
-                Depo:   reader.GetInt32(0),                                                          // depo int
-                IdArti: reader.IsDBNull(1) ? string.Empty : reader.GetString(1).Trim(),              // idarti CHAR/VARCHAR — alfanumérico
-                Bulto:  reader.IsDBNull(2) ? string.Empty : reader.GetString(2).Trim(),              // bulto CHAR
-                Costo:  reader.GetDecimal(3),                                                        // costo NUMERIC
-                Precio: reader.GetDecimal(4),                                                        // precio NUMERIC
-                Saldo:  reader.GetDecimal(5),                                                        // saldo NUMERIC
-                Piezas: reader.IsDBNull(6) ? null : (decimal?)reader.GetDecimal(6)                  // piezas NUMERIC NULL
+                Depo:   reader.GetInt32(0),
+                ArticleId: reader.GetInt32(1),
+                Bulto:  reader.IsDBNull(2) ? string.Empty : reader.GetString(2).Trim(),
+                Costo:  reader.IsDBNull(3) ? null : reader.GetDecimal(3),
+                Precio: reader.IsDBNull(4) ? null : reader.GetDecimal(4),
+                Saldo:  reader.IsDBNull(5) ? null : reader.GetDecimal(5),
+                Piezas: reader.IsDBNull(6) ? null : reader.GetDecimal(6)
             ));
         }
         return results;

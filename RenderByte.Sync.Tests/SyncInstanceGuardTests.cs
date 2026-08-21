@@ -327,4 +327,71 @@ public class SyncInstanceGuardTests
         foreach (var prop in publicProperties)
             Assert.DoesNotContain("TestHook", prop.Name);
     }
+
+    [Fact]
+    public void InstanceGuard_LockDirectoryPermissionDenied_ThrowsSyncPermissionException()
+    {
+        // Simula que Directory.CreateDirectory lanza UnauthorizedAccessException.
+        // El guard debe traducirlo a SyncPermissionException (exit 4), no a IOException.
+        SyncInstanceGuard._testCreateDirectory = _ =>
+            throw new UnauthorizedAccessException("Access to the path is denied.");
+
+        try
+        {
+            var ex = Assert.Throws<SyncPermissionException>(() =>
+                SyncInstanceGuard.AcquireOrThrow("perm-denied-test"));
+
+            Assert.Contains("Cannot create lock directory", ex.Message);
+            Assert.IsNotType<IOException>(ex);
+            Assert.IsNotType<SyncAlreadyRunningException>(ex);
+        }
+        finally
+        {
+            SyncInstanceGuard._testCreateDirectory = null;
+        }
+    }
+
+    [Fact]
+    public void InstanceGuard_LockDirectoryGenericIoFailure_IsNotReportedAsPermission()
+    {
+        // Simula un IOException genérico en Directory.CreateDirectory (disco lleno, path inválido, etc.).
+        // El guard debe propagar IOException, NO SyncPermissionException (exit 4).
+        SyncInstanceGuard._testCreateDirectory = _ =>
+            throw new IOException("The disk is full.");
+
+        try
+        {
+            var ex = Assert.Throws<IOException>(() =>
+                SyncInstanceGuard.AcquireOrThrow("generic-io-test"));
+
+            Assert.IsNotType<SyncPermissionException>(ex);
+            Assert.Contains("Failed to create RenderByte Sync lock directory", ex.Message);
+            Assert.NotNull(ex.InnerException);
+            Assert.Contains("disk is full", ex.InnerException!.Message);
+        }
+        finally
+        {
+            SyncInstanceGuard._testCreateDirectory = null;
+        }
+    }
+
+    [Fact]
+    public void InstanceGuard_LockDirectoryGenericIoFailure_IsNotReportedAsDuplicate()
+    {
+        // Un error de I/O genérico en el directorio NO debe confundirse con instancia duplicada.
+        SyncInstanceGuard._testCreateDirectory = _ =>
+            throw new IOException("Device not ready.");
+
+        try
+        {
+            var ex = Assert.Throws<IOException>(() =>
+                SyncInstanceGuard.AcquireOrThrow("generic-io-duplicate-test"));
+
+            Assert.IsNotType<SyncAlreadyRunningException>(ex);
+        }
+        finally
+        {
+            SyncInstanceGuard._testCreateDirectory = null;
+        }
+    }
 }

@@ -36,6 +36,12 @@ public sealed class SyncInstanceGuard : IDisposable
         _lockPath   = lockPath;
     }
 
+    /// <summary>
+    /// Seam interno para tests: permite inyectar un sustituto de Directory.CreateDirectory.
+    /// Siempre null en producción. Se debe restablecer a null en el bloque finally del test.
+    /// </summary>
+    internal static Action<string>? _testCreateDirectory;
+
     /// <summary>Ruta absoluta del archivo de lock adquirido (para diagnóstico).</summary>
     public string LockPath => _lockPath;
 
@@ -75,17 +81,25 @@ public sealed class SyncInstanceGuard : IDisposable
 
         try
         {
-            Directory.CreateDirectory(locksDir);
+            // En producción: Directory.CreateDirectory(locksDir).
+            // En tests: _testCreateDirectory permite inyectar fallos de creación.
+            if (_testCreateDirectory != null)
+                _testCreateDirectory(locksDir);
+            else
+                Directory.CreateDirectory(locksDir);
         }
         catch (UnauthorizedAccessException)
         {
+            // Denegación de permisos real: el proceso no tiene derecho a crear el directorio.
             throw new SyncPermissionException(
                 $"Cannot create lock directory '{locksDir}'. Run as Administrator or repair permissions.");
         }
         catch (IOException ex)
         {
-            throw new SyncPermissionException(
-                $"Cannot create lock directory '{locksDir}': {ex.Message}");
+            // Error de I/O genérico (disco lleno, path inválido, etc.).
+            // No clasificar como permiso ni como instancia duplicada.
+            throw new IOException(
+                $"Failed to create RenderByte Sync lock directory '{locksDir}'.", ex);
         }
 
         FileStream stream;

@@ -34,6 +34,7 @@ public record SyncStatus(
     string SourceId,
     int? BranchId,
     DateTime? StartedAtUtc,
+    DateTime? LastUpdatedUtc,
     DateTime? LastMovementSuccessUtc,
     DateTime? LastStockSuccessUtc,
     DateTime? LastProductSuccessUtc,

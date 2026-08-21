@@ -89,6 +89,7 @@ public static class ContinuousRunAgent
             SourceId: options.SourceId,
             BranchId: branchId,
             StartedAtUtc: GetUtcNow().UtcDateTime,
+            LastUpdatedUtc: GetUtcNow().UtcDateTime,
             LastMovementSuccessUtc: null,
             LastStockSuccessUtc: null,
             LastProductSuccessUtc: null,
@@ -130,6 +131,7 @@ public static class ContinuousRunAgent
             {
                 while (!ct.IsCancellationRequested)
                 {
+                    bool wroteStatusThisCycle = false;
                     var now = GetUtcNow();
                     var tolerance = TimeSpan.FromMilliseconds(50);
                     
@@ -201,8 +203,8 @@ public static class ContinuousRunAgent
                         {
                             movementCaptureErrors = 0;
                             nextMovementCaptureAttempt = now + TimeSpan.FromSeconds(options.MovementIntervalSeconds);
-                            status = status with { LastMovementSuccessUtc = GetUtcNow().UtcDateTime };
-                            await statusWriter.WriteStatusAsync(status, ct);
+                            status = status with { LastMovementSuccessUtc = GetUtcNow().UtcDateTime, LastUpdatedUtc = GetUtcNow().UtcDateTime };
+                            wroteStatusThisCycle = true;
                         }
                     }
 
@@ -257,8 +259,8 @@ public static class ContinuousRunAgent
                         {
                             stockCaptureErrors = 0;
                             nextStockCaptureAttempt = now + TimeSpan.FromSeconds(options.StockIntervalSeconds);
-                            status = status with { LastStockSuccessUtc = GetUtcNow().UtcDateTime };
-                            await statusWriter.WriteStatusAsync(status, ct);
+                            status = status with { LastStockSuccessUtc = GetUtcNow().UtcDateTime, LastUpdatedUtc = GetUtcNow().UtcDateTime };
+                            wroteStatusThisCycle = true;
                         }
                     }
 
@@ -313,8 +315,8 @@ public static class ContinuousRunAgent
                         {
                             productCaptureErrors = 0;
                             nextProductCaptureAttempt = now + TimeSpan.FromSeconds(options.ProductIntervalSeconds);
-                            status = status with { LastProductSuccessUtc = GetUtcNow().UtcDateTime };
-                            await statusWriter.WriteStatusAsync(status, ct);
+                            status = status with { LastProductSuccessUtc = GetUtcNow().UtcDateTime, LastUpdatedUtc = GetUtcNow().UtcDateTime };
+                            wroteStatusThisCycle = true;
                         }
                     }
 
@@ -346,17 +348,20 @@ public static class ContinuousRunAgent
                     }
 
                     // Update and write status at the end of the loop iteration
-                    try
+                    if (wroteStatusThisCycle)
                     {
-                        var movPending = (int)await store.GetPendingCountAsync(ct); // Approximation for status
-                        // Assume stock/product pending are similarly derived, or just keep 0 for now as M12 scope
-                        status = status with { 
-                            MovementPending = movPending,
-                            LastError = (movementCaptureErrors > 0 || movementTransportErrors > 0 || stockCaptureErrors > 0 || stockTransportErrors > 0 || productCaptureErrors > 0 || productTransportErrors > 0) ? "One or more pipelines are in error state." : null
-                        };
-                        await statusWriter.WriteStatusAsync(status, ct);
+                        try
+                        {
+                            var movPending = (int)await store.GetPendingCountAsync(ct); // Approximation for status
+                            // Assume stock/product pending are similarly derived, or just keep 0 for now as M12 scope
+                            status = status with { 
+                                MovementPending = movPending,
+                                LastError = (movementCaptureErrors > 0 || movementTransportErrors > 0 || stockCaptureErrors > 0 || stockTransportErrors > 0 || productCaptureErrors > 0 || productTransportErrors > 0) ? "One or more pipelines are in error state." : null
+                            };
+                            await statusWriter.WriteStatusAsync(status, ct);
+                        }
+                        catch { /* Ignore status write failures to not crash the pipeline */ }
                     }
-                    catch { /* Ignore status write failures to not crash the pipeline */ }
                 }
             }
             catch (OperationCanceledException)

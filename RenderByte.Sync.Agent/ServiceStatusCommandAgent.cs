@@ -48,10 +48,14 @@ public static class ServiceStatusCommandAgent
                         }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Ignore parse errors
+                    Console.Error.WriteLine($"\n[ERROR] Failed to read operational status: {ex.Message}");
                 }
+            }
+            else
+            {
+                Console.WriteLine("Operational status: not yet available");
             }
             return 0;
         }

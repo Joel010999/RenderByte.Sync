@@ -344,6 +344,19 @@ public static class ContinuousRunAgent
                             nextProductTransportAttempt = now + transportIdleInterval;
                         }
                     }
+
+                    // Update and write status at the end of the loop iteration
+                    try
+                    {
+                        var movPending = (int)await store.GetPendingCountAsync(ct); // Approximation for status
+                        // Assume stock/product pending are similarly derived, or just keep 0 for now as M12 scope
+                        status = status with { 
+                            MovementPending = movPending,
+                            LastError = (movementCaptureErrors > 0 || movementTransportErrors > 0 || stockCaptureErrors > 0 || stockTransportErrors > 0 || productCaptureErrors > 0 || productTransportErrors > 0) ? "One or more pipelines are in error state." : null
+                        };
+                        await statusWriter.WriteStatusAsync(status, ct);
+                    }
+                    catch { /* Ignore status write failures to not crash the pipeline */ }
                 }
             }
             catch (OperationCanceledException)

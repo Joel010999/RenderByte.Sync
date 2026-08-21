@@ -51,10 +51,20 @@ public static class ServiceInstallCommandAgent
                 Console.Error.WriteLine($"[ERROR] SQLite database not found at {dbPath}. Please run the agent interactively first or ensure the file exists.");
                 return 1;
             }
+            
+            if (Environment.GetEnvironmentVariable("RENDERBYTE_SYNC_TEST_MODE") != "1")
+            {
+                var store = new RenderByte.Sync.Persistence.SqliteSyncBatchStore(dbPath);
+                var protector = new WindowsDpapiSecretProtector();
+                var resolver = new SyncConfigurationResolver(protector);
+                var options = resolver.Resolve();
+                await store.OpenExistingInstallationAsync(options.SourceId);
+                await store.DisposeAsync();
+            }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[ERROR] Configuration or secrets validation failed: {ex.Message}");
+            Console.Error.WriteLine($"[ERROR] Configuration, secrets, or SQLite validation failed: {ex.Message}");
             Console.Error.WriteLine("Cannot install service with invalid configuration.");
             return 1;
         }

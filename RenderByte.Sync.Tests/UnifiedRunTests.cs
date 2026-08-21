@@ -146,7 +146,7 @@ public class UnifiedRunTests : IDisposable
 
         var mockHttp = new MockHttpMessageHandler();
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -202,7 +202,7 @@ public class UnifiedRunTests : IDisposable
 
         var mockHttp = new MockHttpMessageHandler();
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -239,7 +239,7 @@ public class UnifiedRunTests : IDisposable
 
         var mockHttp = new MockHttpMessageHandler();
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(500);
         cts.Cancel();
@@ -279,7 +279,7 @@ public class UnifiedRunTests : IDisposable
         var stockMock = new Mock<IStockReader>();
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -321,7 +321,7 @@ public class UnifiedRunTests : IDisposable
 
         var productMock = new Mock<IProductReader>();
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -362,7 +362,7 @@ public class UnifiedRunTests : IDisposable
 
         var stockMock = new Mock<IStockReader>();
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -396,7 +396,7 @@ public class UnifiedRunTests : IDisposable
         var stockMock = new Mock<IStockReader>();
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -430,7 +430,7 @@ public class UnifiedRunTests : IDisposable
         var productMock = new Mock<IProductReader>();
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -464,7 +464,7 @@ public class UnifiedRunTests : IDisposable
         var stockMock = new Mock<IStockReader>();
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -536,7 +536,7 @@ public class UnifiedRunTests : IDisposable
         };
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -577,7 +577,7 @@ public class UnifiedRunTests : IDisposable
         };
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();
@@ -620,7 +620,7 @@ public class UnifiedRunTests : IDisposable
         var stockMock = new Mock<IStockReader>();
 
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         while (delaysRequested.Count < 3) { await Task.Delay(50); }
         cts.Cancel();

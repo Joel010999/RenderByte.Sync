@@ -6,7 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-public class SyncStatusWriter
+public class SyncStatusWriter : ISyncStatusWriter
 {
     private readonly string _statusFilePath;
     private readonly object _lock = new();

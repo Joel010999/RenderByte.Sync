@@ -7,6 +7,7 @@ using RenderByte.Sync.Infrastructure.Alegon;
 using RenderByte.Sync.Persistence;
 using RenderByte.Sync.Agent.Services;
 using RenderByte.Sync.Agent.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace RenderByte.Sync.Agent;
 
@@ -19,58 +20,84 @@ public static class ContinuousRunAgent
         ResolvedSyncOptions options, 
         IAlegonReader reader, 
         CancellationToken ct, 
+        ILogger logger,
+        ISyncStatusWriter statusWriter,
         HttpMessageHandler? httpHandler = null,
         IProductReader? productReaderOverride = null,
         IStockReader? stockReaderOverride = null)
     {
-        Console.WriteLine("[START] RenderByte Sync - Unified Continuous Mode");
+        logger.LogInformation("[START] RenderByte Sync - Unified Continuous Mode");
         
-        SyncInstanceGuard? guard = null;
+        var dbPath = SyncDbPath.Resolve();
+        await using var store = new SqliteSyncBatchStore(dbPath);
+
+        int branchId = 0;
+        bool isOfflineStartup = false;
         try
         {
-            guard = SyncInstanceGuard.AcquireOrThrow(options.SourceId);
+            branchId = await reader.GetBranchNumberAsync(ct);
+            await store.InitializeAsync(options.SourceId, branchId, ct);
         }
-        catch (SyncAlreadyRunningException ex)
+        catch (InvalidOperationException ex)
         {
-            Console.Error.WriteLine($"[ERROR] {ex.Message}. Agente detenido.");
-            return 3;
+            logger.LogCritical(ex, "[ERROR] {Message}. Agente detenido.", ex.Message);
+            return 2;
         }
-
-        using (guard)
+        catch (Exception ex)
         {
-            var dbPath = SyncDbPath.Resolve();
-            await using var store = new SqliteSyncBatchStore(dbPath);
-
-            int branchId;
+            logger.LogWarning(ex, "[WARN] No se pudo obtener branchId de Alegon. Intentando arrancar en modo offline con metadata persistida.");
             try
             {
-                branchId = await reader.GetBranchNumberAsync(ct);
+                await store.OpenExistingInstallationAsync(options.SourceId, ct);
+                var cp = await store.GetCheckpointAsync(ct);
+                if (cp != null)
+                {
+                    branchId = cp.BranchId;
+                    isOfflineStartup = true;
+                    logger.LogInformation("[INFO] Arrancando en modo offline usando branchId persistido: {branchId}", branchId);
+                }
+                else
+                {
+                    logger.LogError("[ERROR] No se puede arrancar offline: no hay checkpoint previo persistido.");
+                    return 1;
+                }
             }
-            catch (Exception ex)
+            catch (InvalidOperationException offlineInvEx)
             {
-                Console.Error.WriteLine($"[ERROR] No se pudo obtener branchId de Alegon: {ex.Message}");
-                return 1;
-            }
-
-            try
-            {
-                await store.InitializeAsync(options.SourceId, branchId, ct);
-            }
-            catch (InvalidOperationException ex)
-            {
-                Console.Error.WriteLine($"[ERROR] {ex.Message}. Agente detenido.");
+                logger.LogCritical(offlineInvEx, "[ERROR] {Message}. Agente detenido.", offlineInvEx.Message);
                 return 2;
             }
-
-            Console.WriteLine($"[source] {options.SourceId}");
-            Console.WriteLine($"[branch] {branchId}");
-
-            var cp = await store.GetCheckpointAsync(ct);
-            if (cp == null)
+            catch (Exception offlineEx)
             {
-                Console.Error.WriteLine("[ERROR] No hay checkpoint persistido. M7 no admite backfill histórico. Ejecute bootstrap primero.");
+                logger.LogError(offlineEx, "[ERROR] Falló la inicialización local offline.");
                 return 1;
             }
+        }
+
+        logger.LogInformation("[source] {SourceId}", options.SourceId);
+        logger.LogInformation("[branch] {BranchId}", branchId);
+
+        var startCp = await store.GetCheckpointAsync(ct);
+        if (startCp == null)
+        {
+            logger.LogError("[ERROR] No hay checkpoint persistido. M7 no admite backfill histórico. Ejecute bootstrap primero.");
+            return 1;
+        }
+
+        var status = new SyncStatus(
+            ServiceVersion: "0.12.0",
+            SourceId: options.SourceId,
+            BranchId: branchId,
+            StartedAtUtc: GetUtcNow().UtcDateTime,
+            LastMovementSuccessUtc: null,
+            LastStockSuccessUtc: null,
+            LastProductSuccessUtc: null,
+            MovementPending: 0,
+            StockPending: 0,
+            ProductPending: 0,
+            LastError: null
+        );
+        await statusWriter.WriteStatusAsync(status, ct);
 
             using var client = new HttpSyncClient(options.ApiUrl, options.ApiKey, httpHandler);
             var transport = new SyncTransportService(store, client, options.SourceId);
@@ -130,11 +157,36 @@ public static class ContinuousRunAgent
                     if (now + tolerance >= nextMovementCaptureAttempt && !ct.IsCancellationRequested)
                     {
                         bool hadError = false;
-                        try { await movementService.CaptureAsync(ct); }
+                        try 
+                        { 
+                            if (isOfflineStartup)
+                            {
+                                // Attempt to validate branch if offline
+                                try
+                                {
+                                    var realBranch = await reader.GetBranchNumberAsync(ct);
+                                    if (realBranch != branchId)
+                                    {
+                                        throw new InvalidOperationException($"[BRANCH MISMATCH] SCM Offline recovery: Persisted branch was {branchId}, but Alegon now reports {realBranch}.");
+                                    }
+                                    isOfflineStartup = false;
+                                }
+                                catch (Exception ex) when (ex is not InvalidOperationException)
+                                {
+                                    // Still offline, that's fine
+                                }
+                            }
+                            await movementService.CaptureAsync(ct); 
+                        }
                         catch (OperationCanceledException) { throw; }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("[BRANCH MISMATCH]"))
+                        {
+                            logger.LogCritical(ex, "[FATAL] Inconsistencia de branch detectada.");
+                            return 1;
+                        }
                         catch (Exception ex)
                         {
-                            Console.Error.WriteLine($"[WARN] MOVEMENTS CAPTURE failure: {ex.Message}");
+                            logger.LogWarning("[WARN] MOVEMENTS CAPTURE failure: {Message}", ex.Message);
                             hadError = true;
                         }
 
@@ -142,13 +194,15 @@ public static class ContinuousRunAgent
                         {
                             movementCaptureErrors++;
                             var wait = GetBackoff(movementCaptureErrors);
-                            Console.Error.WriteLine($"[SCHEDULER] MOVEMENTS CAPTURE backoff {wait.TotalSeconds}s.");
+                            logger.LogWarning("[SCHEDULER] MOVEMENTS CAPTURE backoff {WaitSeconds}s.", wait.TotalSeconds);
                             nextMovementCaptureAttempt = now + wait;
                         }
                         else
                         {
                             movementCaptureErrors = 0;
                             nextMovementCaptureAttempt = now + TimeSpan.FromSeconds(options.MovementIntervalSeconds);
+                            status = status with { LastMovementSuccessUtc = GetUtcNow().UtcDateTime };
+                            await statusWriter.WriteStatusAsync(status, ct);
                         }
                     }
 
@@ -161,7 +215,7 @@ public static class ContinuousRunAgent
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
                         {
-                            Console.Error.WriteLine($"[WARN] MOVEMENTS SYNC failure: {ex.Message}");
+                            logger.LogWarning("[WARN] MOVEMENTS SYNC failure: {Message}", ex.Message);
                             hadError = true;
                         }
 
@@ -169,7 +223,7 @@ public static class ContinuousRunAgent
                         {
                             movementTransportErrors++;
                             var wait = GetBackoff(movementTransportErrors);
-                            Console.Error.WriteLine($"[SCHEDULER] MOVEMENTS SYNC backoff {wait.TotalSeconds}s.");
+                            logger.LogWarning("[SCHEDULER] MOVEMENTS SYNC backoff {WaitSeconds}s.", wait.TotalSeconds);
                             nextMovementTransportAttempt = now + wait;
                         }
                         else
@@ -188,7 +242,7 @@ public static class ContinuousRunAgent
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
                         {
-                            Console.Error.WriteLine($"[WARN] STOCK CAPTURE failure: {ex.Message}");
+                            logger.LogWarning("[WARN] STOCK CAPTURE failure: {Message}", ex.Message);
                             hadError = true;
                         }
 
@@ -196,13 +250,15 @@ public static class ContinuousRunAgent
                         {
                             stockCaptureErrors++;
                             var wait = GetBackoff(stockCaptureErrors);
-                            Console.Error.WriteLine($"[SCHEDULER] STOCK CAPTURE backoff {wait.TotalSeconds}s.");
+                            logger.LogWarning("[SCHEDULER] STOCK CAPTURE backoff {WaitSeconds}s.", wait.TotalSeconds);
                             nextStockCaptureAttempt = now + wait;
                         }
                         else
                         {
                             stockCaptureErrors = 0;
                             nextStockCaptureAttempt = now + TimeSpan.FromSeconds(options.StockIntervalSeconds);
+                            status = status with { LastStockSuccessUtc = GetUtcNow().UtcDateTime };
+                            await statusWriter.WriteStatusAsync(status, ct);
                         }
                     }
 
@@ -215,7 +271,7 @@ public static class ContinuousRunAgent
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
                         {
-                            Console.Error.WriteLine($"[WARN] STOCK SYNC failure: {ex.Message}");
+                            logger.LogWarning("[WARN] STOCK SYNC failure: {Message}", ex.Message);
                             hadError = true;
                         }
 
@@ -223,7 +279,7 @@ public static class ContinuousRunAgent
                         {
                             stockTransportErrors++;
                             var wait = GetBackoff(stockTransportErrors);
-                            Console.Error.WriteLine($"[SCHEDULER] STOCK SYNC backoff {wait.TotalSeconds}s.");
+                            logger.LogWarning("[SCHEDULER] STOCK SYNC backoff {WaitSeconds}s.", wait.TotalSeconds);
                             nextStockTransportAttempt = now + wait;
                         }
                         else
@@ -242,7 +298,7 @@ public static class ContinuousRunAgent
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
                         {
-                            Console.Error.WriteLine($"[WARN] PRODUCTS CAPTURE failure: {ex.Message}");
+                            logger.LogWarning("[WARN] PRODUCTS CAPTURE failure: {Message}", ex.Message);
                             hadError = true;
                         }
 
@@ -250,13 +306,15 @@ public static class ContinuousRunAgent
                         {
                             productCaptureErrors++;
                             var wait = GetBackoff(productCaptureErrors);
-                            Console.Error.WriteLine($"[SCHEDULER] PRODUCTS CAPTURE backoff {wait.TotalSeconds}s.");
+                            logger.LogWarning("[SCHEDULER] PRODUCTS CAPTURE backoff {WaitSeconds}s.", wait.TotalSeconds);
                             nextProductCaptureAttempt = now + wait;
                         }
                         else
                         {
                             productCaptureErrors = 0;
                             nextProductCaptureAttempt = now + TimeSpan.FromSeconds(options.ProductIntervalSeconds);
+                            status = status with { LastProductSuccessUtc = GetUtcNow().UtcDateTime };
+                            await statusWriter.WriteStatusAsync(status, ct);
                         }
                     }
 
@@ -269,7 +327,7 @@ public static class ContinuousRunAgent
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
                         {
-                            Console.Error.WriteLine($"[WARN] PRODUCTS SYNC failure: {ex.Message}");
+                            logger.LogWarning("[WARN] PRODUCTS SYNC failure: {Message}", ex.Message);
                             hadError = true;
                         }
 
@@ -277,7 +335,7 @@ public static class ContinuousRunAgent
                         {
                             productTransportErrors++;
                             var wait = GetBackoff(productTransportErrors);
-                            Console.Error.WriteLine($"[SCHEDULER] PRODUCTS SYNC backoff {wait.TotalSeconds}s.");
+                            logger.LogWarning("[SCHEDULER] PRODUCTS SYNC backoff {WaitSeconds}s.", wait.TotalSeconds);
                             nextProductTransportAttempt = now + wait;
                         }
                         else
@@ -290,12 +348,11 @@ public static class ContinuousRunAgent
             }
             catch (OperationCanceledException)
             {
-                Console.WriteLine("[STOP] Agente detenido por cancelación.");
+                logger.LogInformation("[STOP] Agente detenido por cancelación.");
             }
 
-            Console.WriteLine("[shutdown] Deteniendo RenderByte Sync...");
+            logger.LogInformation("[shutdown] Deteniendo RenderByte Sync...");
             return 0;
-        }
     }
 
     private static TimeSpan GetBackoff(int errors)

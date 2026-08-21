@@ -26,18 +26,16 @@ public class WindowsServiceManager : IWindowsServiceManager
 
     public async Task InstallAsync(string serviceName, string displayName, string description, string exePath, string arguments, CancellationToken cancellationToken = default)
     {
-        var binPath = $"\"{exePath}\" {arguments}";
+        var args = new[] { "create", serviceName, $"binPath= \"{exePath}\" {arguments}", "start= auto", "obj= LocalSystem", $"DisplayName= \"{displayName}\"" };
+        await RunScCommandAsync(args, cancellationToken);
         
-        var createArgs = $"create {serviceName} binPath= \"{binPath}\" start= auto obj= LocalSystem DisplayName= \"{displayName}\"";
-        await RunScCommandAsync(createArgs, cancellationToken);
-        
-        var descArgs = $"description {serviceName} \"{description}\"";
+        var descArgs = new[] { "description", serviceName, description };
         await RunScCommandAsync(descArgs, cancellationToken);
     }
 
     public async Task UninstallAsync(string serviceName, CancellationToken cancellationToken = default)
     {
-        await RunScCommandAsync($"delete {serviceName}", cancellationToken);
+        await RunScCommandAsync(new[] { "delete", serviceName }, cancellationToken);
     }
 
     public Task StartAsync(string serviceName, CancellationToken cancellationToken = default)
@@ -80,21 +78,24 @@ public class WindowsServiceManager : IWindowsServiceManager
     public async Task ConfigureRecoveryAsync(string serviceName, CancellationToken cancellationToken = default)
     {
         // restart/60000/restart/60000/restart/60000 = restart on 1st, 2nd, and subsequent with 60s delay
-        var args = $"failure {serviceName} reset= 86400 actions= restart/60000/restart/60000/restart/60000";
+        var args = new[] { "failure", serviceName, "reset= 86400", "actions= restart/60000/restart/60000/restart/60000" };
         await RunScCommandAsync(args, cancellationToken);
     }
 
-    private async Task RunScCommandAsync(string arguments, CancellationToken cancellationToken)
+    private async Task RunScCommandAsync(string[] arguments, CancellationToken cancellationToken)
     {
         var psi = new ProcessStartInfo
         {
             FileName = "sc.exe",
-            Arguments = arguments,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        foreach (var arg in arguments)
+        {
+            psi.ArgumentList.Add(arg);
+        }
 
         using var process = Process.Start(psi);
         if (process == null) throw new InvalidOperationException("Failed to start sc.exe");

@@ -3,7 +3,9 @@ using RenderByte.Sync.Agent.Configuration;
 using RenderByte.Sync.Infrastructure.Alegon;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using RenderByte.Sync.Agent.Logging;
+using RenderByte.Sync.Agent.Services;
 // ─── Punto de entrada único de RenderByte Sync ────────────────────────────────
 //
 // Comandos disponibles:
@@ -60,6 +62,7 @@ if (command == "service")
 
             services.AddSingleton(options);
             services.AddSingleton(reader);
+            services.AddSingleton<ISyncStatusWriter>(new SyncStatusWriter(Path.Combine(SyncPaths.GetConfigDirectory(), "status.json")));
             services.AddHostedService<RenderByteSyncWorker>();
         })
         .Build();
@@ -149,7 +152,13 @@ try
             await OutboxTestAgent.RunShowAsync(args.Length > 1 ? args[1..] : Array.Empty<string>(), cts.Token),
 
         "run" =>
-            await ContinuousRunAgent.RunAsync(options, reader, cts.Token),
+            await ContinuousRunAgent.RunAsync(
+                options, 
+                reader, 
+                cts.Token, 
+                LoggerFactory.Create(b => b.AddConsole()).CreateLogger("RenderByte.Sync.Agent"),
+                new RenderByte.Sync.Agent.Services.SyncStatusWriter(Path.Combine(SyncPaths.GetConfigDirectory(), "status.json"))
+            ),
 
         "outbox-sync" =>
             await OutboxSyncAgent.RunAsync(sourceId, args.Length > 1 ? args[1..] : Array.Empty<string>(), cts.Token),

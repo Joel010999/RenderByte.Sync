@@ -7,18 +7,21 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using RenderByte.Sync.Agent.Configuration;
 using RenderByte.Sync.Infrastructure.Alegon;
+using RenderByte.Sync.Agent.Services;
 
 public class RenderByteSyncWorker : BackgroundService
 {
     private readonly ResolvedSyncOptions _options;
     private readonly AlegonReader _reader;
     private readonly ILogger<RenderByteSyncWorker> _logger;
+    private readonly ISyncStatusWriter _statusWriter;
 
-    public RenderByteSyncWorker(ResolvedSyncOptions options, AlegonReader reader, ILogger<RenderByteSyncWorker> logger)
+    public RenderByteSyncWorker(ResolvedSyncOptions options, AlegonReader reader, ILogger<RenderByteSyncWorker> logger, ISyncStatusWriter statusWriter)
     {
         _options = options;
         _reader = reader;
         _logger = logger;
+        _statusWriter = statusWriter;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -31,7 +34,7 @@ public class RenderByteSyncWorker : BackgroundService
             guard = SyncInstanceGuard.AcquireOrThrow(_options.SourceId);
             _logger.LogInformation("Acquired instance guard for SourceId: {SourceId}", _options.SourceId);
 
-            await ContinuousRunAgent.RunAsync(_options, _reader, stoppingToken);
+            await ContinuousRunAgent.RunAsync(_options, _reader, stoppingToken, _logger, _statusWriter);
         }
         catch (OperationCanceledException)
         {
@@ -40,12 +43,12 @@ public class RenderByteSyncWorker : BackgroundService
         catch (SyncAlreadyRunningException ex)
         {
             _logger.LogCritical(ex, "Failed to start service because another instance is already running.");
-            Environment.Exit(3);
+            throw; // Host will terminate
         }
         catch (Exception ex)
         {
             _logger.LogCritical(ex, "A fatal unhandled exception occurred in the sync worker.");
-            Environment.Exit(1);
+            throw; // Host will terminate
         }
         finally
         {

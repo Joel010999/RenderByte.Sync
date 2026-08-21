@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Security.AccessControl;
@@ -228,6 +229,7 @@ public class SyncInstanceGuardTests
     }
 
     [Fact]
+    [SupportedOSPlatform("windows")]
     public void InstanceGuard_CreateRace_ThenOpenExisting_Succeeds()
     {
         if (!OperatingSystem.IsWindows()) return;

@@ -201,6 +201,7 @@ public static class ContinuousRunAgent
                         }
                         else
                         {
+                            logger.LogInformation("[MOVEMENTS CAPTURE] success");
                             movementCaptureErrors = 0;
                             nextMovementCaptureAttempt = now + TimeSpan.FromSeconds(options.MovementIntervalSeconds);
                             status = status with { LastMovementSuccessUtc = GetUtcNow().UtcDateTime, LastUpdatedUtc = GetUtcNow().UtcDateTime };
@@ -230,6 +231,7 @@ public static class ContinuousRunAgent
                         }
                         else
                         {
+                            logger.LogInformation("[MOVEMENTS SYNC] success");
                             movementTransportErrors = 0;
                             nextMovementTransportAttempt = now + transportIdleInterval;
                         }
@@ -257,6 +259,7 @@ public static class ContinuousRunAgent
                         }
                         else
                         {
+                            logger.LogInformation("[STOCK CAPTURE] success");
                             stockCaptureErrors = 0;
                             nextStockCaptureAttempt = now + TimeSpan.FromSeconds(options.StockIntervalSeconds);
                             status = status with { LastStockSuccessUtc = GetUtcNow().UtcDateTime, LastUpdatedUtc = GetUtcNow().UtcDateTime };
@@ -286,6 +289,7 @@ public static class ContinuousRunAgent
                         }
                         else
                         {
+                            logger.LogInformation("[STOCK SYNC] success");
                             stockTransportErrors = 0;
                             nextStockTransportAttempt = now + transportIdleInterval;
                         }
@@ -313,6 +317,7 @@ public static class ContinuousRunAgent
                         }
                         else
                         {
+                            logger.LogInformation("[PRODUCTS CAPTURE] success");
                             productCaptureErrors = 0;
                             nextProductCaptureAttempt = now + TimeSpan.FromSeconds(options.ProductIntervalSeconds);
                             status = status with { LastProductSuccessUtc = GetUtcNow().UtcDateTime, LastUpdatedUtc = GetUtcNow().UtcDateTime };
@@ -342,6 +347,7 @@ public static class ContinuousRunAgent
                         }
                         else
                         {
+                            logger.LogInformation("[PRODUCTS SYNC] success");
                             productTransportErrors = 0;
                             nextProductTransportAttempt = now + transportIdleInterval;
                         }

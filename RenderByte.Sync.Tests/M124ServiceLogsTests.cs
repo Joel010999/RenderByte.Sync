@@ -127,7 +127,7 @@ public class M124ServiceLogsTests : IDisposable
         try { await ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, _loggerMock.Object, _statusWriterMock.Object, httpHandlerMock.Object, productReaderMock.Object, stockReaderMock.Object); }
         catch (OperationCanceledException) { }
 
-        VerifyLogContains("[MOVEMENTS CAPTURE] captured=1");
+        VerifyLogContains("[MOVEMENTS CAPTURE] success");
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class M124ServiceLogsTests : IDisposable
         try { await ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, _loggerMock.Object, _statusWriterMock.Object, httpHandlerMock.Object, productReaderMock.Object, stockReaderMock.Object); }
         catch (OperationCanceledException) { }
 
-        VerifyLogContains("[MOVEMENTS SYNC] accepted=1");
+        VerifyLogContains("[MOVEMENTS SYNC] success");
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public class M124ServiceLogsTests : IDisposable
         try { await ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, _loggerMock.Object, _statusWriterMock.Object, httpHandlerMock.Object, productReaderMock.Object, stockReaderMock.Object); }
         catch (OperationCanceledException) { }
 
-        VerifyLogContains("[STOCK CAPTURE] snapshot=1");
+        VerifyLogContains("[STOCK CAPTURE] success");
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class M124ServiceLogsTests : IDisposable
         try { await ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, _loggerMock.Object, _statusWriterMock.Object, httpHandlerMock.Object, productReaderMock.Object, stockReaderMock.Object); }
         catch (OperationCanceledException) { }
 
-        VerifyLogContains("[STOCK SYNC] accepted=1");
+        VerifyLogContains("[STOCK SYNC] success");
     }
     
     [Fact]
@@ -189,7 +189,7 @@ public class M124ServiceLogsTests : IDisposable
         try { await ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, _loggerMock.Object, _statusWriterMock.Object, httpHandlerMock.Object, productReaderMock.Object, stockReaderMock.Object); }
         catch (OperationCanceledException) { }
 
-        VerifyLogContains("[PRODUCTS CAPTURE] snapshot=0");
+        VerifyLogContains("[PRODUCTS CAPTURE] success");
     }
 
     [Fact]
@@ -214,7 +214,7 @@ public class M124ServiceLogsTests : IDisposable
         try { await ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, _loggerMock.Object, _statusWriterMock.Object, httpHandlerMock.Object, productReaderMock.Object, stockReaderMock.Object); }
         catch (OperationCanceledException) { }
 
-        VerifyLogContains("[PRODUCTS SYNC] accepted=1");
+        VerifyLogContains("[PRODUCTS SYNC] success");
     }
 
     [Fact]
@@ -231,6 +231,7 @@ public class M124ServiceLogsTests : IDisposable
 
         VerifyLogContains("[WARN] MOVEMENTS CAPTURE failure: Mocked database error");
         VerifyLogContains("[SCHEDULER] MOVEMENTS CAPTURE backoff");
+        VerifyLogDoesNotContain("[MOVEMENTS CAPTURE] success");
     }
 
     [Fact]

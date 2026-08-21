@@ -1,4 +1,5 @@
 using System;
+using Microsoft.Extensions.Logging;
 using System.Threading;
 using System.Threading.Tasks;
 using RenderByte.Sync.Contracts;
@@ -16,12 +17,14 @@ public class MovementSyncService
     private readonly int _branchId;
     private readonly int _readBatchSize;
     private readonly int _uploadBatchSize;
+    private readonly Microsoft.Extensions.Logging.ILogger _logger;
 
     public MovementSyncService(
         IAlegonReader reader, 
         ISyncBatchStore store, 
         SyncTransportService transport, 
         int branchId,
+        Microsoft.Extensions.Logging.ILogger logger,
         int readBatchSize = 100,
         int uploadBatchSize = 200)
     {
@@ -29,6 +32,7 @@ public class MovementSyncService
         _store = store;
         _transport = transport;
         _branchId = branchId;
+        _logger = logger;
         _readBatchSize = readBatchSize;
         _uploadBatchSize = uploadBatchSize;
     }
@@ -48,7 +52,7 @@ public class MovementSyncService
             var cpAfter = MovementCheckpoint.From(movements[^1]);
             var res = await _store.PersistBatchAndCheckpointAsync(_branchId, movements, cpAfter, ct);
             
-            Console.WriteLine($"[MOVEMENTS] capture={movements.Count} pending={res.Inserted}");
+            _logger.LogInformation("[MOVEMENTS CAPTURE] captured={Count} pending={Pending}", movements.Count, res.Inserted);
             return movements.Count;
         }
         return 0;
@@ -63,7 +67,7 @@ public class MovementSyncService
         }
         if (sentCount > 0)
         {
-            Console.WriteLine($"[MOVEMENTS SYNC] accepted={sentCount}");
+            _logger.LogInformation("[MOVEMENTS SYNC] accepted={Count}", sentCount);
         }
         return sentCount;
     }

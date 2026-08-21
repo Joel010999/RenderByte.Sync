@@ -8,8 +8,9 @@ namespace RenderByte.Sync.Agent;
 
 public static class StocksSyncOnceAgent
 {
-    public static async Task<int> RunAsync(string sourceId, IStockReader reader, string[] args, CancellationToken ct, IStockStore? storeOverride = null, HttpMessageHandler? httpHandler = null)
+    public static async Task<int> RunAsync(string sourceId, IStockReader reader, string[] args, CancellationToken ct, IStockStore? storeOverride = null, HttpMessageHandler? httpHandler = null, Microsoft.Extensions.Logging.ILogger? logger = null)
     {
+        var activeLogger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
         IStockStore store;
         if (storeOverride != null)
         {
@@ -55,7 +56,7 @@ public static class StocksSyncOnceAgent
         }
 
         using var client = new HttpSyncClient(apiUrl, apiKey, httpHandler);
-        var service = new RenderByte.Sync.Agent.Services.StockSyncService(reader, store, client, sourceId, branchId);
+        var service = new RenderByte.Sync.Agent.Services.StockSyncService(reader, store, client, sourceId, branchId, activeLogger);
 
         try
         {

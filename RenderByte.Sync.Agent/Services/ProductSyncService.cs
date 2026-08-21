@@ -1,4 +1,5 @@
 using System;
+using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -17,19 +18,22 @@ public class ProductSyncService
     private readonly HttpSyncClient _client;
     private readonly string _sourceId;
     private readonly int _branchId;
+    private readonly ILogger _logger;
 
     public ProductSyncService(
         IProductReader reader,
         IProductStore store,
         HttpSyncClient client,
         string sourceId,
-        int branchId)
+        int branchId,
+        ILogger logger)
     {
         _reader = reader;
         _store = store;
         _client = client;
         _sourceId = sourceId;
         _branchId = branchId;
+        _logger = logger;
     }
 
     public async Task<(int Snapshot, int Changed)> CaptureAsync(CancellationToken ct = default)
@@ -77,7 +81,7 @@ public class ProductSyncService
         }
 
         var outboxCreated = news + changed + missing;
-        Console.WriteLine($"[PRODUCTS] snapshot={snapshot.Count} changed={outboxCreated} unchanged={unchanged}");
+        _logger.LogInformation("[PRODUCTS CAPTURE] snapshot={Snapshot} changed={Changed} unchanged={Unchanged}", snapshot.Count, outboxCreated, unchanged);
         
         return (snapshot.Count, outboxCreated);
     }
@@ -116,7 +120,7 @@ public class ProductSyncService
                             await _store.MarkOutboxSentAsync(msg.Id, ct);
                         }
                         totalSent += res.Accepted;
-                        Console.WriteLine($"[PRODUCTS SYNC] accepted={res.Accepted}");
+                        _logger.LogInformation("[PRODUCTS SYNC] accepted={Accepted}", res.Accepted);
                     }
                     else
                     {
@@ -137,6 +141,12 @@ public class ProductSyncService
                 throw;
             }
         }
+        
+        if (totalSent == 0)
+        {
+            _logger.LogInformation("[PRODUCTS SYNC] accepted=0 / no pending");
+        }
+
         return totalSent;
     }
 }

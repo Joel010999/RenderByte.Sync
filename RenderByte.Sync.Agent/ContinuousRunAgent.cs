@@ -107,9 +107,9 @@ public static class ContinuousRunAgent
             var productReader = productReaderOverride ?? new AlegonProductReader(options.AlegonConnectionString);
             var stockReader = stockReaderOverride ?? new AlegonStockReader(options.AlegonConnectionString);
 
-            var movementService = new MovementSyncService(movementReader, store, transport, branchId, options.ReadBatchSize, options.UploadBatchSize);
-            var productService = new ProductSyncService(productReader, store, client, options.SourceId, branchId);
-            var stockService = new StockSyncService(stockReader, store, client, options.SourceId, branchId);
+            var movementService = new MovementSyncService(movementReader, store, transport, branchId, logger, options.ReadBatchSize, options.UploadBatchSize);
+            var productService = new ProductSyncService(productReader, store, client, options.SourceId, branchId, logger);
+            var stockService = new StockSyncService(stockReader, store, client, options.SourceId, branchId, logger);
 
             DateTimeOffset nextMovementCaptureAttempt = DateTimeOffset.MinValue;
             DateTimeOffset nextMovementTransportAttempt = DateTimeOffset.MinValue;

@@ -1,4 +1,5 @@
 using System;
+using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -18,19 +19,22 @@ public class StockSyncService
     private readonly HttpSyncClient _client;
     private readonly string _sourceId;
     private readonly int _branchId;
+    private readonly ILogger _logger;
 
     public StockSyncService(
         IStockReader reader,
         IStockStore store,
         HttpSyncClient client,
         string sourceId,
-        int branchId)
+        int branchId,
+        ILogger logger)
     {
         _reader = reader;
         _store = store;
         _client = client;
         _sourceId = sourceId;
         _branchId = branchId;
+        _logger = logger;
     }
 
     public async Task<(int Snapshot, int Changed)> CaptureAsync(CancellationToken ct = default)
@@ -81,7 +85,7 @@ public class StockSyncService
         }
 
         var outboxCreated = news + changed + missing;
-        Console.WriteLine($"[STOCK] snapshot={snapshot.Count} changed={outboxCreated} unchanged={unchanged}");
+        _logger.LogInformation("[STOCK CAPTURE] snapshot={Snapshot} changed={Changed} unchanged={Unchanged}", snapshot.Count, outboxCreated, unchanged);
         
         return (snapshot.Count, outboxCreated);
     }
@@ -133,7 +137,7 @@ public class StockSyncService
                             await _store.MarkStockOutboxSentAsync(msg.Id, ct);
                         }
                         totalSent += res.Accepted;
-                        Console.WriteLine($"[STOCK SYNC] accepted={res.Accepted}");
+                        _logger.LogInformation("[STOCK SYNC] accepted={Accepted}", res.Accepted);
                     }
                     else
                     {
@@ -154,6 +158,12 @@ public class StockSyncService
                 throw;
             }
         }
+        
+        if (totalSent == 0)
+        {
+            _logger.LogInformation("[STOCK SYNC] accepted=0 / no pending");
+        }
+
         return totalSent;
     }
 }

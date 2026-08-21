@@ -7,8 +7,9 @@ namespace RenderByte.Sync.Agent;
 
 public static class ProductsSyncOnceAgent
 {
-    public static async Task<int> RunAsync(string sourceId, IProductReader reader, string[] args, CancellationToken ct, IProductStore? storeOverride = null, HttpMessageHandler? httpHandler = null)
+    public static async Task<int> RunAsync(string sourceId, IProductReader reader, string[] args, CancellationToken ct, IProductStore? storeOverride = null, HttpMessageHandler? httpHandler = null, Microsoft.Extensions.Logging.ILogger? logger = null)
     {
+        var activeLogger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
         IProductStore store;
         if (storeOverride != null)
         {
@@ -54,7 +55,7 @@ public static class ProductsSyncOnceAgent
         }
 
         using var client = new HttpSyncClient(apiUrl, apiKey, httpHandler);
-        var service = new RenderByte.Sync.Agent.Services.ProductSyncService(reader, store, client, sourceId, branchId);
+        var service = new RenderByte.Sync.Agent.Services.ProductSyncService(reader, store, client, sourceId, branchId, activeLogger);
 
         try
         {

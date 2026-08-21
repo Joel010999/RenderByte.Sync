@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 
 public class WindowsServiceManager : IWindowsServiceManager
 {
-    public bool IsInstalled(string serviceName)
+    public virtual bool IsInstalled(string serviceName)
     {
         try
         {
@@ -26,11 +26,35 @@ public class WindowsServiceManager : IWindowsServiceManager
 
     public async Task InstallAsync(string serviceName, string displayName, string description, string exePath, string arguments, CancellationToken cancellationToken = default)
     {
-        var args = new[] { "create", serviceName, $"binPath= \"{exePath}\" {arguments}", "start= auto", "obj= LocalSystem", $"DisplayName= \"{displayName}\"" };
+        var args = new[] 
+        { 
+            "create", 
+            serviceName, 
+            "binPath=", $"\"{exePath}\" {arguments}", 
+            "start=", "auto", 
+            "obj=", "LocalSystem", 
+            "DisplayName=", displayName 
+        };
+        
         await RunScCommandAsync(args, cancellationToken);
         
-        var descArgs = new[] { "description", serviceName, description };
-        await RunScCommandAsync(descArgs, cancellationToken);
+        if (!IsInstalled(serviceName))
+        {
+            throw new InvalidOperationException($"Service '{serviceName}' was not found after creation.");
+        }
+
+        try
+        {
+            var descArgs = new[] { "description", serviceName, description };
+            await RunScCommandAsync(descArgs, cancellationToken);
+            
+            await ConfigureRecoveryAsync(serviceName, cancellationToken);
+        }
+        catch (Exception)
+        {
+            try { await UninstallAsync(serviceName, CancellationToken.None); } catch { }
+            throw;
+        }
     }
 
     public async Task UninstallAsync(string serviceName, CancellationToken cancellationToken = default)
@@ -77,12 +101,11 @@ public class WindowsServiceManager : IWindowsServiceManager
 
     public async Task ConfigureRecoveryAsync(string serviceName, CancellationToken cancellationToken = default)
     {
-        // restart/60000/restart/60000/restart/60000 = restart on 1st, 2nd, and subsequent with 60s delay
-        var args = new[] { "failure", serviceName, "reset= 86400", "actions= restart/60000/restart/60000/restart/60000" };
+        var args = new[] { "failure", serviceName, "reset=", "86400", "actions=", "restart/60000/restart/60000/restart/60000" };
         await RunScCommandAsync(args, cancellationToken);
     }
 
-    private async Task RunScCommandAsync(string[] arguments, CancellationToken cancellationToken)
+    protected virtual async Task RunScCommandAsync(string[] arguments, CancellationToken cancellationToken)
     {
         var psi = new ProcessStartInfo
         {

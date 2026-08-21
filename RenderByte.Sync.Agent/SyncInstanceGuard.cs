@@ -1,30 +1,25 @@
 namespace RenderByte.Sync.Agent;
 
+using System;
+using System.Linq;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Threading;
+
 /// <summary>
 /// Excepción lanzada cuando ya existe una instancia del agente en ejecución.
 /// </summary>
 public sealed class SyncAlreadyRunningException(string message) : Exception(message);
 
 /// <summary>
+/// Excepción lanzada cuando hay un error de permisos intentando acceder al Mutex.
+/// </summary>
+public sealed class SyncPermissionException(string message) : Exception(message);
+
+/// <summary>
 /// Guard de instancia única usando Named Mutex de Windows.
 /// Previene que múltiples instancias del agente muten el estado local simultáneamente.
 /// </summary>
-/// <remarks>
-/// Estrategia de namespace del Mutex:
-/// <list type="bullet">
-///   <item>
-///     Primero intenta <c>Global\RenderByteSync-{sourceId}</c>.
-///     El namespace <c>Global\</c> es visible entre todas las sesiones de Windows.
-///     Funciona correctamente cuando el agente corre como Windows Service (cuenta de servicio).
-///   </item>
-///   <item>
-///     Si Windows niega el acceso (usuario interactivo sin <c>SeCreateGlobalPrivilege</c>),
-///     cae automáticamente a <c>Local\RenderByteSync-{sourceId}</c>, visible solo dentro
-///     de la misma sesión de usuario. Se emite un warning en consola.
-///   </item>
-/// </list>
-/// Dispose libera el Mutex, permitiendo que otra instancia pueda adquirirlo.
-/// </remarks>
 public sealed class SyncInstanceGuard : IDisposable
 {
     private readonly Mutex  _mutex;
@@ -42,49 +37,108 @@ public sealed class SyncInstanceGuard : IDisposable
     public string MutexName => _mutexName;
 
     /// <summary>
-    /// Intenta adquirir la instancia única para el <paramref name="sourceId"/> dado.
+    /// Devuelve el nombre canónico del Mutex para el sourceId dado.
     /// </summary>
-    /// <exception cref="SyncAlreadyRunningException">
-    /// Si ya hay una instancia adquiriendo el mismo mutex.
-    /// </exception>
-    public static SyncInstanceGuard AcquireOrThrow(string sourceId)
+    public static string GetMutexName(string sourceId)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceId);
-
+        
         // Sanitizar sourceId para nombre válido de kernel object (solo alfanuméricos y guiones)
         var safeName = new string(sourceId.Select(c =>
             char.IsLetterOrDigit(c) || c == '-' ? c : '_').ToArray());
 
-        var globalName = $@"Global\RenderByteSync-{safeName}";
-        var localName  = $@"Local\RenderByteSync-{safeName}";
+        if (OperatingSystem.IsWindows())
+        {
+            return $@"Global\RenderByteSync-{safeName}";
+        }
+        
+        return $@"Local\RenderByteSync-{safeName}";
+    }
 
-        Mutex   mutex;
-        string  mutexName;
-        bool    useGlobal;
+    /// <summary>
+    /// Intenta adquirir la instancia única para el <paramref name="sourceId"/> dado.
+    /// </summary>
+    public static SyncInstanceGuard AcquireOrThrow(string sourceId)
+    {
+        var mutexName = GetMutexName(sourceId);
+        Mutex mutex;
 
         try
         {
-            mutex     = new Mutex(false, globalName);
-            mutexName = globalName;
-            useGlobal = true;
+            if (OperatingSystem.IsWindows())
+            {
+                while (true)
+                {
+                    try
+                    {
+                        if (MutexAcl.TryOpenExisting(mutexName, MutexRights.Synchronize | MutexRights.Modify, out var existingMutex))
+                        {
+                            mutex = existingMutex!;
+                            break;
+                        }
+
+                        var security = new MutexSecurity();
+                        
+                        // Allow LocalSystem
+                        security.AddAccessRule(new MutexAccessRule(
+                            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                            MutexRights.Synchronize | MutexRights.Modify,
+                            AccessControlType.Allow));
+                        
+                        // Allow Built-in Administrators
+                        security.AddAccessRule(new MutexAccessRule(
+                            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+                            MutexRights.Synchronize | MutexRights.Modify,
+                            AccessControlType.Allow));
+                        
+                        // Allow Authenticated Users (so non-elevated interactive runs can wait on it and detect it's locked)
+                        security.AddAccessRule(new MutexAccessRule(
+                            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+                            MutexRights.Synchronize | MutexRights.Modify,
+                            AccessControlType.Allow));
+
+                        mutex = MutexAcl.Create(false, mutexName, out _, security);
+                        break;
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        // Race condition: another process created the mutex between our TryOpenExisting 
+                        // and Create. If we just don't have permission to create it (or to open the now-existing one 
+                        // with Create's default FullControl), TryOpenExisting will either succeed (if we have 
+                        // Synchronize | Modify) or throw its own UnauthorizedAccessException on the next loop 
+                        // (which is then correctly surfaced below).
+                        
+                        // If it's a genuine permission issue that persists, TryOpenExisting will throw,
+                        // breaking the loop and bubbling out to the outer catch.
+                        
+                        // Wait a tiny bit just to avoid tight spinning, though usually TryOpenExisting 
+                        // will immediately succeed or throw.
+                        Thread.Sleep(10);
+                    }
+                }
+            }
+            else
+            {
+                mutex = new Mutex(false, mutexName);
+            }
         }
         catch (UnauthorizedAccessException)
         {
-            // Sin SeCreateGlobalPrivilege — ocurre en sesiones no-interactivas sin ser servicio
-            Console.WriteLine(
-                $"[WARN] Sin acceso a mutex Global\\. Usando Local\\. " +
-                $"Como Windows Service, Global\\ estará disponible sin cambios de código.");
-            mutex     = new Mutex(false, localName);
-            mutexName = localName;
-            useGlobal = false;
+            throw new SyncPermissionException(
+                $"Cannot access the global RenderByte Sync instance guard. Run as Administrator or repair permissions.");
         }
-
-        _ = useGlobal; // evita warning de variable no usada
 
         bool acquired;
         try
         {
             acquired = mutex.WaitOne(TimeSpan.Zero);
+        }
+        catch (AbandonedMutexException)
+        {
+            // Abandoned mutex means the previous owner crashed without releasing it.
+            // Ownership is automatically transferred to us.
+            Console.WriteLine("[INSTANCE GUARD] Recovered abandoned mutex.");
+            acquired = true;
         }
         catch
         {
@@ -95,11 +149,7 @@ public sealed class SyncInstanceGuard : IDisposable
         if (!acquired)
         {
             mutex.Dispose();
-            throw new SyncAlreadyRunningException(
-                $"Ya existe una instancia de RenderByte Sync en ejecución " +
-                $"para source_id='{sourceId}'. " +
-                $"Mutex: {mutexName}. " +
-                $"Detenga el proceso existente antes de iniciar uno nuevo.");
+            throw new SyncAlreadyRunningException($"RenderByte Sync is already running for this source.");
         }
 
         return new SyncInstanceGuard(mutex, mutexName);

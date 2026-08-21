@@ -127,6 +127,11 @@ if (mutatingCommands.Contains(command))
         Console.Error.WriteLine($"[ERROR] {ex.Message}");
         return 3; // exit code específico: instancia duplicada
     }
+    catch (SyncPermissionException ex)
+    {
+        Console.Error.WriteLine($"[ERROR] {ex.Message}");
+        return 4; // exit code específico: error de permisos
+    }
 }
 
 try

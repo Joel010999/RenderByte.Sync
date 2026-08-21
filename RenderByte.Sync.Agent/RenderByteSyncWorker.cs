@@ -45,6 +45,11 @@ public class RenderByteSyncWorker : BackgroundService
             _logger.LogCritical(ex, "Failed to start service because another instance is already running.");
             throw; // Host will terminate
         }
+        catch (SyncPermissionException ex)
+        {
+            _logger.LogCritical(ex, "Failed to start service due to permissions.");
+            throw; // Host will terminate
+        }
         catch (Exception ex)
         {
             _logger.LogCritical(ex, "A fatal unhandled exception occurred in the sync worker.");

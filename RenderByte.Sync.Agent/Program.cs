@@ -21,8 +21,9 @@ using RenderByte.Sync.Agent.Services;
 //   outbox-show [limit]                       → muestra outbox pendiente (lectura)
 //   products-sync-once                        → sync one-shot de productos
 //   stocks-sync-once                          → sync one-shot de stocks
+//   backfill-movements [--from YYYY-MM-DD]    → histórico hacia la API en batches directos
 //
-// Comandos mutantes (outbox-test, checkpoint-test, batch-test) requieren Single Instance Guard.
+// Comandos mutantes (outbox-test, checkpoint-test, batch-test, backfill-movements) requieren Single Instance Guard.
 // Comandos de solo lectura (outbox-show, checkpoint-show, movements-test) no requieren mutex.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -113,7 +114,7 @@ var reader = new AlegonReader(connectionString);
 
 // ── Comandos mutantes: adquirir Single Instance Guard ─────────────────────────
 var mutatingCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    { "outbox-test", "checkpoint-test", "batch-test", "run", "products-sync-once", "stocks-sync-once" };
+    { "outbox-test", "checkpoint-test", "batch-test", "run", "products-sync-once", "stocks-sync-once", "backfill-movements" };
 
 SyncInstanceGuard? guard = null;
 if (mutatingCommands.Contains(command))
@@ -179,6 +180,9 @@ try
 
         "stocks-sync-once" =>
             await StocksSyncOnceAgent.RunAsync(sourceId, new AlegonStockReader(connectionString), args.Length > 1 ? args[1..] : Array.Empty<string>(), cts.Token),
+
+        "backfill-movements" =>
+            await BackfillMovementsCommandAgent.RunAsync(options, reader, args.Length > 1 ? args[1..] : Array.Empty<string>(), cts.Token),
 
         // Sin argumento o cualquier otro → health-check (comportamiento original intacto)
         _ =>

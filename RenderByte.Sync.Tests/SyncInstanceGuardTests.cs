@@ -307,4 +307,21 @@ public class SyncInstanceGuardTests
             SyncInstanceGuard.TestHook_CreateThrow = null;
         }
     }
+    [Fact]
+    public void SyncInstanceGuard_DoesNotExposePublicTestHooks()
+    {
+        var type = typeof(SyncInstanceGuard);
+        
+        var publicFields = type.GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance);
+        foreach (var field in publicFields)
+        {
+            Assert.DoesNotContain("TestHook", field.Name);
+        }
+
+        var publicProperties = type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance);
+        foreach (var prop in publicProperties)
+        {
+            Assert.DoesNotContain("TestHook", prop.Name);
+        }
+    }
 }

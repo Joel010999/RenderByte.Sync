@@ -55,8 +55,8 @@ public sealed class SyncInstanceGuard : IDisposable
         return $@"Local\RenderByteSync-{safeName}";
     }
 
-    public static Action? TestHook_BeforeCreate;
-    public static Action? TestHook_CreateThrow;
+    internal static Action? TestHook_BeforeCreate;
+    internal static Action? TestHook_CreateThrow;
 
     /// <summary>
     /// Intenta adquirir la instancia única para el <paramref name="sourceId"/> dado.

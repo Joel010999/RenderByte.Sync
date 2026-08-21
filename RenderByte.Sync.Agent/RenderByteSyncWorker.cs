@@ -26,7 +26,7 @@ public class RenderByteSyncWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("[START] RenderByte Sync v0.12.0 - Windows Service Mode starting...");
+        _logger.LogInformation("[START] RenderByte Sync v0.12.6 - Windows Service Mode starting...");
         
         SyncInstanceGuard? guard = null;
         try

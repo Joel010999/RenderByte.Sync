@@ -1,329 +1,330 @@
 using System;
 using System.Diagnostics;
-using System.Runtime.Versioning;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Security.AccessControl;
-using System.Security.Principal;
 using RenderByte.Sync.Agent;
 using Xunit;
 
 namespace RenderByte.Sync.Tests;
 
+/// <summary>
+/// Tests para SyncInstanceGuard usando process-lifetime file lock (M12.6).
+/// El guard usa FileStream exclusivo: no es thread-affine, sobrevive async/await
+/// y el OS lo libera automáticamente cuando el proceso termina.
+/// </summary>
 public class SyncInstanceGuardTests
 {
-    private const string TestSourceId = "test-guard-source";
+    // --- helpers ---------------------------------------------------------------
 
-    [Fact]
-    public void InstanceGuard_ServiceAndInteractive_UseSameGlobalName()
+    private static string LockPath(string sourceId) =>
+        SyncInstanceGuard.GetLockPath(sourceId);
+
+    /// <summary>
+    /// Intenta eliminar el archivo de lock huérfano antes/después de cada test.
+    /// Si el archivo está en uso, lo ignora (se limpiará cuando el proceso termine).
+    /// </summary>
+    private static void CleanupLock(string sourceId)
     {
-        var name = SyncInstanceGuard.GetMutexName(TestSourceId);
-        if (OperatingSystem.IsWindows())
-        {
-            Assert.StartsWith(@"Global\", name);
-            Assert.Equal($@"Global\RenderByteSync-{TestSourceId}", name);
-        }
-        else
-        {
-            Assert.StartsWith(@"Local\", name);
-            Assert.Equal($@"Local\RenderByteSync-{TestSourceId}", name);
-        }
+        try { File.Delete(LockPath(sourceId)); } catch { /* ignorar */ }
     }
 
-    [Fact]
-    public void InstanceGuard_DoesNotSilentlySplitGlobalAndLocalNamespaces()
-    {
-        var name = SyncInstanceGuard.GetMutexName(TestSourceId);
-        if (OperatingSystem.IsWindows())
-        {
-            Assert.DoesNotContain(@"Local\", name);
-        }
-    }
+    // --- tests -----------------------------------------------------------------
 
-    private bool CanCreateGlobalMutex()
+    [Fact]
+    public void InstanceGuard_FirstInstance_AcquiresExclusiveFileLock()
     {
-        if (!OperatingSystem.IsWindows()) return true;
+        var sourceId = "first-instance-lock";
+        CleanupLock(sourceId);
         try
         {
-            var name = SyncInstanceGuard.GetMutexName("test-priv");
-            using var m = new Mutex(false, name);
-            return true;
+            using var guard = SyncInstanceGuard.AcquireOrThrow(sourceId);
+
+            Assert.NotNull(guard);
+            Assert.True(File.Exists(guard.LockPath), "El archivo de lock debe existir.");
+            Assert.EndsWith(".lock", guard.LockPath);
         }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
+        finally { CleanupLock(sourceId); }
     }
 
     [Fact]
     public void InstanceGuard_CurrentOwner_BlocksSecondInstance()
     {
-        if (!CanCreateGlobalMutex()) return;
-
-        using var guard = SyncInstanceGuard.AcquireOrThrow(TestSourceId);
-        
-        Exception? backgroundException = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                using var secondGuard = SyncInstanceGuard.AcquireOrThrow(TestSourceId);
-            }
-            catch (Exception ex)
-            {
-                backgroundException = ex;
-            }
-        });
-        thread.Start();
-        thread.Join();
-        
-        Assert.NotNull(backgroundException);
-        Assert.IsType<SyncAlreadyRunningException>(backgroundException);
-        Assert.Contains("already running", backgroundException.Message);
-    }
-
-    [Fact]
-    public void InstanceGuard_AbandonedMutex_IsRecoveredAndAcquired()
-    {
-        if (!CanCreateGlobalMutex()) return;
-
-        var source = "abandon-thread";
-        var name = SyncInstanceGuard.GetMutexName(source);
-        
-        var thread = new Thread(() =>
-        {
-            using var mutex = new Mutex(false, name);
-            mutex.WaitOne();
-            // Thread exits without releasing -> abandoned
-        });
-        thread.Start();
-        thread.Join();
-
-        using var guard = SyncInstanceGuard.AcquireOrThrow(source);
-        Assert.NotNull(guard);
-        Assert.Equal(name, guard.MutexName);
-    }
-
-    [Fact]
-    public void InstanceGuard_AbandonedMutex_DoesNotCrashProcess()
-    {
-        if (!CanCreateGlobalMutex()) return;
-
-        var source = "abandon-crash";
-        var name = SyncInstanceGuard.GetMutexName(source);
-        
-        var thread = new Thread(() =>
-        {
-            using var mutex = new Mutex(false, name);
-            mutex.WaitOne();
-        });
-        thread.Start();
-        thread.Join();
-
-        var exception = Record.Exception(() =>
-        {
-            using var guard = SyncInstanceGuard.AcquireOrThrow(source);
-        });
-
-        Assert.Null(exception);
-    }
-
-    [Fact]
-    public void InstanceGuard_AbandonedMutex_CrossProcessRecovery()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        if (!CanCreateGlobalMutex()) return;
-
-        var sourceId = "cross-process-test";
-        var name = SyncInstanceGuard.GetMutexName(sourceId);
-
-        var psScript = $@"
-            $m = New-Object System.Threading.Mutex($false, '{name}')
-            $m.WaitOne() | Out-Null
-            [Environment]::Exit(0)
-        ";
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            Arguments = $"-NoProfile -Command \"{psScript}\"",
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        var process = Process.Start(psi);
-        process?.WaitForExit();
-
-        var exception = Record.Exception(() =>
+        var sourceId = "current-owner-blocks";
+        CleanupLock(sourceId);
+        try
         {
             using var guard = SyncInstanceGuard.AcquireOrThrow(sourceId);
-        });
 
-        Assert.Null(exception);
+            Exception? backgroundEx = null;
+            var thread = new Thread(() =>
+            {
+                try { using var _ = SyncInstanceGuard.AcquireOrThrow(sourceId); }
+                catch (Exception ex) { backgroundEx = ex; }
+            });
+            thread.Start();
+            thread.Join();
+
+            Assert.NotNull(backgroundEx);
+            Assert.IsType<SyncAlreadyRunningException>(backgroundEx);
+            Assert.Contains("already running", backgroundEx.Message);
+        }
+        finally { CleanupLock(sourceId); }
     }
 
     [Fact]
     public void InstanceGuard_CurrentOwner_ReturnsControlledDuplicateError()
     {
-        var ex = new SyncAlreadyRunningException("duplicate");
-        Assert.Equal("duplicate", ex.Message);
+        var ex = new SyncAlreadyRunningException("RenderByte Sync is already running for this source.");
+        Assert.Contains("already running", ex.Message);
+    }
+
+    [Fact]
+    public void InstanceGuard_Dispose_AllowsNextInstance()
+    {
+        var sourceId = "dispose-allows-next";
+        CleanupLock(sourceId);
+        try
+        {
+            var guard = SyncInstanceGuard.AcquireOrThrow(sourceId);
+            guard.Dispose(); // liberar explícitamente
+
+            // Tras el Dispose, otro intento en el mismo proceso debe tener éxito
+            var ex = Record.Exception(() =>
+            {
+                using var second = SyncInstanceGuard.AcquireOrThrow(sourceId);
+            });
+            Assert.Null(ex);
+        }
+        finally { CleanupLock(sourceId); }
+    }
+
+    [Fact]
+    public void InstanceGuard_ProcessCrash_ReleasesOperatingSystemLock()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var sourceId = "process-crash-test";
+        var lockPath = SyncInstanceGuard.GetLockPath(sourceId);
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+        CleanupLock(sourceId);
+
+        try
+        {
+            // PowerShell abre el archivo con lock exclusivo y luego termina el proceso
+            // sin Dispose/Close. El OS libera el handle al terminar el proceso.
+            var psScript =
+                $"$fs = [System.IO.File]::Open('{lockPath}', 'OpenOrCreate', 'ReadWrite', 'None'); " +
+                "[Environment]::Exit(0)";
+
+            var psi = new ProcessStartInfo
+            {
+                FileName        = "powershell.exe",
+                Arguments       = $"-NoProfile -Command \"{psScript}\"",
+                UseShellExecute = false,
+                CreateNoWindow  = true
+            };
+            using var process = Process.Start(psi)!;
+            process.WaitForExit();
+
+            // Después de que el proceso terminó, el lock debe estar libre
+            var ex = Record.Exception(() =>
+            {
+                using var guard = SyncInstanceGuard.AcquireOrThrow(sourceId);
+            });
+            Assert.Null(ex);
+        }
+        finally { CleanupLock(sourceId); }
+    }
+
+    [Fact]
+    public async Task InstanceGuard_IsNotThreadAffine()
+    {
+        // Prueba que el lock NO es thread-affine:
+        // Se adquiere en Thread A, se continúa en el pool via Task.Yield, y se libera desde ahí.
+        // Con un Mutex thread-affine esto fallaría (ReleaseMutex desde el thread incorrecto).
+
+        var sourceId = "thread-affine-test";
+        CleanupLock(sourceId);
+        try
+        {
+            SyncInstanceGuard? guard = null;
+
+            // Adquirir en un thread dedicado
+            var acquireThread = new Thread(() =>
+            {
+                guard = SyncInstanceGuard.AcquireOrThrow(sourceId);
+            });
+            acquireThread.Start();
+            acquireThread.Join();
+
+            Assert.NotNull(guard);
+
+            // Forzar continuación en un thread del pool (≠ acquireThread)
+            await Task.Yield();
+
+            // Dispose desde este thread (pool thread) — no debe lanzar excepción
+            var disposeEx = Record.Exception(() => guard!.Dispose());
+            Assert.Null(disposeEx);
+
+            // Tras el Dispose, una nueva instancia debe tener éxito
+            var acquireEx = Record.Exception(() =>
+            {
+                using var _ = SyncInstanceGuard.AcquireOrThrow(sourceId);
+            });
+            Assert.Null(acquireEx);
+        }
+        finally { CleanupLock(sourceId); }
+    }
+
+    [Fact]
+    public async Task InstanceGuard_AsyncContinuation_SecondInstanceStillBlocked()
+    {
+        // Regresión crítica M12.6: el guard adquirido antes de un await debe seguir
+        // bloqueando a un segundo proceso/thread DESPUÉS de que la continuación
+        // se ejecute en un thread del pool diferente.
+
+        var sourceId = "async-continuation-blocks";
+        CleanupLock(sourceId);
+        try
+        {
+            var guard = SyncInstanceGuard.AcquireOrThrow(sourceId);
+
+            // Simular comportamiento de BackgroundService: await en el camino crítico
+            await Task.Yield();
+
+            // El segundo intento debe seguir bloqueado aunque estemos en un thread distinto
+            Exception? secondEx = null;
+            var thread = new Thread(() =>
+            {
+                try { using var _ = SyncInstanceGuard.AcquireOrThrow(sourceId); }
+                catch (Exception e) { secondEx = e; }
+            });
+            thread.Start();
+            thread.Join();
+
+            Assert.IsType<SyncAlreadyRunningException>(secondEx);
+
+            guard.Dispose();
+        }
+        finally { CleanupLock(sourceId); }
+    }
+
+    [Fact]
+    public void InstanceGuard_ServiceAndInteractive_UseSameCanonicalLockPath()
+    {
+        // El servicio (Session 0 / LocalSystem) y el modo interactivo deben usar
+        // exactamente la misma ruta de lock para el mismo sourceId.
+        var sourceId = "canonical-path-test";
+        var path1 = SyncInstanceGuard.GetLockPath(sourceId);
+        var path2 = SyncInstanceGuard.GetLockPath(sourceId);
+
+        Assert.Equal(path1, path2);
+        Assert.True(Path.IsPathRooted(path1), "La ruta del lock debe ser absoluta.");
+        Assert.EndsWith(".lock", path1);
+        Assert.Contains("locks", path1);
+    }
+
+    [Fact]
+    public void InstanceGuard_LockPath_IsPerSource()
+    {
+        var pathA = SyncInstanceGuard.GetLockPath("source-a");
+        var pathB = SyncInstanceGuard.GetLockPath("source-b");
+        Assert.NotEqual(pathA, pathB);
     }
 
     [Fact]
     public void InstanceGuard_PermissionFailure_IsNotReportedAsDuplicate()
     {
-        var ex = new SyncPermissionException("permission");
-        Assert.Equal("permission", ex.Message);
+        // Los dos tipos de excepción deben ser distintos.
+        // Un error de permisos no debe aparecer como instancia duplicada.
+        var permEx = new SyncPermissionException("Cannot access the lock.");
+        var dupEx  = new SyncAlreadyRunningException("RenderByte Sync is already running for this source.");
+
+        Assert.IsNotType<SyncAlreadyRunningException>(permEx);
+        Assert.IsNotType<SyncPermissionException>(dupEx);
     }
 
     [Fact]
-    public void InstanceGuard_PersistentUnauthorized_ThrowsSyncPermissionException()
+    public void InstanceGuard_StaleLockFileWithoutOpenHandle_DoesNotBlockStartup()
     {
-        if (!OperatingSystem.IsWindows()) return;
-        if (!CanCreateGlobalMutex()) return;
+        // Un archivo .lock huérfano en disco (sin ningún proceso que lo tenga abierto)
+        // no debe impedir que el siguiente proceso lo adquiera.
+        var sourceId = "stale-lock-test";
+        var lockPath = SyncInstanceGuard.GetLockPath(sourceId);
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
 
-        var sourceId = "test-persist-unauth";
-        var name = SyncInstanceGuard.GetMutexName(sourceId);
-
-        var security = new MutexSecurity();
-        security.AddAccessRule(new MutexAccessRule(
-            WindowsIdentity.GetCurrent().User!,
-            MutexRights.Synchronize | MutexRights.Modify,
-            AccessControlType.Deny));
-
-        using var m = MutexAcl.Create(false, name, out _, security);
-
-        var ex = Assert.Throws<SyncPermissionException>(() =>
-        {
-            SyncInstanceGuard.AcquireOrThrow(sourceId);
-        });
-
-        Assert.Contains("Cannot access", ex.Message);
-    }
-
-    [Fact]
-    public async Task InstanceGuard_PersistentUnauthorized_DoesNotLoopForever()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        if (!CanCreateGlobalMutex()) return;
-
-        var sourceId = "test-no-loop";
-        var name = SyncInstanceGuard.GetMutexName(sourceId);
-
-        var security = new MutexSecurity();
-        security.AddAccessRule(new MutexAccessRule(
-            WindowsIdentity.GetCurrent().User!,
-            MutexRights.Synchronize | MutexRights.Modify,
-            AccessControlType.Deny));
-
-        using var m = MutexAcl.Create(false, name, out _, security);
-
-        var task = Task.Run(() =>
-        {
-            Assert.Throws<SyncPermissionException>(() => SyncInstanceGuard.AcquireOrThrow(sourceId));
-        });
-
-        // Fail if it takes longer than 2 seconds, which implies an infinite loop
-        var completedTask = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(2)));
-        Assert.True(completedTask == task, "Test timed out, possibly due to infinite loop.");
-    }
-
-    [Fact]
-    [SupportedOSPlatform("windows")]
-    public void InstanceGuard_CreateRace_ThenOpenExisting_Succeeds()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        if (!CanCreateGlobalMutex()) return;
-
-        var sourceId = "test-race-succeeds";
-        var name = SyncInstanceGuard.GetMutexName(sourceId);
-
-        Mutex? backgroundMutex = null;
-
-        // TryOpenExisting returns false, then hook creates mutex, then MutexAcl.Create throws
-        SyncInstanceGuard.TestHook_BeforeCreate = () =>
-        {
-            if (backgroundMutex == null)
-            {
-                var security = new MutexSecurity();
-                security.AddAccessRule(new MutexAccessRule(
-                    WindowsIdentity.GetCurrent().User!,
-                    MutexRights.Synchronize | MutexRights.Modify,
-                    AccessControlType.Allow));
-                backgroundMutex = MutexAcl.Create(false, name, out _, security);
-            }
-        };
-
-        // Ensure Create throws UnauthorizedAccessException to simulate lacking FullControl
-        SyncInstanceGuard.TestHook_CreateThrow = () =>
-        {
-            throw new UnauthorizedAccessException("Simulated race Create failure");
-        };
+        // Crear archivo vacío simulando lock de proceso previo que crasheó
+        File.WriteAllBytes(lockPath, Array.Empty<byte>());
 
         try
         {
-            // First loop: TryOpenExisting fails, BeforeCreate creates it, Create throws.
-            // Second loop: TryOpenExisting succeeds!
-            using var guard = SyncInstanceGuard.AcquireOrThrow(sourceId);
-            Assert.NotNull(guard);
-        }
-        finally
-        {
-            SyncInstanceGuard.TestHook_BeforeCreate = null;
-            SyncInstanceGuard.TestHook_CreateThrow = null;
-            backgroundMutex?.Dispose();
-        }
-    }
-
-    [Fact]
-    public async Task InstanceGuard_CreateRace_RetryIsBounded()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        if (!CanCreateGlobalMutex()) return;
-
-        var sourceId = "test-race-bounded";
-        
-        // Always throw UnauthorizedAccessException in Create to simulate persistent race failure
-        SyncInstanceGuard.TestHook_CreateThrow = () =>
-        {
-            throw new UnauthorizedAccessException("Simulated race Create failure");
-        };
-
-        try
-        {
-            var task = Task.Run(() =>
+            var ex = Record.Exception(() =>
             {
-                var ex = Assert.Throws<SyncPermissionException>(() =>
-                {
-                    SyncInstanceGuard.AcquireOrThrow(sourceId);
-                });
-                Assert.Contains("Failed to acquire instance guard due to a persistent race condition", ex.Message);
+                using var guard = SyncInstanceGuard.AcquireOrThrow(sourceId);
             });
-
-            // Fail if it takes longer than 2 seconds (infinite loop)
-            var completedTask = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(2)));
-            Assert.True(completedTask == task, "Test timed out, possibly due to infinite loop.");
+            Assert.Null(ex);
         }
-        finally
-        {
-            SyncInstanceGuard.TestHook_CreateThrow = null;
-        }
+        finally { CleanupLock(sourceId); }
     }
+
+    [Fact]
+    public async Task ServiceMode_HoldsInstanceGuardForEntireRunLifetime()
+    {
+        // Simula el patrón real del worker:
+        // guard adquirido → await RunAsync() de larga duración → durante ese tiempo
+        // ningún segundo intento debe tener éxito → sólo tras Dispose.
+
+        var sourceId = "service-lifetime-test";
+        CleanupLock(sourceId);
+        try
+        {
+            var guard = SyncInstanceGuard.AcquireOrThrow(sourceId);
+
+            // Simular trabajo async continuo (ContinuousRunAgent.RunAsync)
+            await Task.Delay(100);
+
+            // Durante la ejecución: segundo intento debe ser bloqueado
+            Exception? blockedEx = null;
+            var thread = new Thread(() =>
+            {
+                try { using var _ = SyncInstanceGuard.AcquireOrThrow(sourceId); }
+                catch (Exception e) { blockedEx = e; }
+            });
+            thread.Start();
+            thread.Join();
+
+            Assert.IsType<SyncAlreadyRunningException>(blockedEx);
+
+            // Sólo tras Dispose: nuevo intento debe tener éxito
+            guard.Dispose();
+
+            var afterEx = Record.Exception(() =>
+            {
+                using var _ = SyncInstanceGuard.AcquireOrThrow(sourceId);
+            });
+            Assert.Null(afterEx);
+        }
+        finally { CleanupLock(sourceId); }
+    }
+
     [Fact]
     public void SyncInstanceGuard_DoesNotExposePublicTestHooks()
     {
         var type = typeof(SyncInstanceGuard);
-        
-        var publicFields = type.GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance);
-        foreach (var field in publicFields)
-        {
-            Assert.DoesNotContain("TestHook", field.Name);
-        }
 
-        var publicProperties = type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance);
+        var publicFields = type.GetFields(
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.Instance);
+        foreach (var field in publicFields)
+            Assert.DoesNotContain("TestHook", field.Name);
+
+        var publicProperties = type.GetProperties(
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.Instance);
         foreach (var prop in publicProperties)
-        {
             Assert.DoesNotContain("TestHook", prop.Name);
-        }
     }
 }

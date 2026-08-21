@@ -1,10 +1,9 @@
 namespace RenderByte.Sync.Agent;
 
 using System;
+using System.IO;
 using System.Linq;
-using System.Security.AccessControl;
-using System.Security.Principal;
-using System.Threading;
+using RenderByte.Sync.Agent.Configuration;
 
 /// <summary>
 /// Excepción lanzada cuando ya existe una instancia del agente en ejecución.
@@ -12,174 +11,130 @@ using System.Threading;
 public sealed class SyncAlreadyRunningException(string message) : Exception(message);
 
 /// <summary>
-/// Excepción lanzada cuando hay un error de permisos intentando acceder al Mutex.
+/// Excepción lanzada cuando hay un error de permisos intentando acceder al lock de instancia.
 /// </summary>
 public sealed class SyncPermissionException(string message) : Exception(message);
 
 /// <summary>
-/// Guard de instancia única usando Named Mutex de Windows.
-/// Previene que múltiples instancias del agente muten el estado local simultáneamente.
+/// Guard de instancia única usando un <see cref="FileStream"/> exclusivo como lock de proceso.
+///
+/// El lock pertenece al proceso (no al thread), por lo que:
+/// - Sobrevive async/await con continuaciones en threads arbitrarios del pool.
+/// - Funciona entre Session 0 (LocalSystem) y sesiones interactivas.
+/// - El OS lo libera automáticamente cuando el proceso termina por cualquier causa
+///   (normal, Ctrl+C, crash, kill), sin necesidad de Dispose explícito.
+/// - Un archivo .lock huérfano en disco sin handle abierto no bloquea el inicio.
 /// </summary>
 public sealed class SyncInstanceGuard : IDisposable
 {
-    private readonly Mutex  _mutex;
-    private readonly string _mutexName;
-    private          bool   _owned;
+    private readonly FileStream _lockStream;
+    private readonly string     _lockPath;
 
-    private SyncInstanceGuard(Mutex mutex, string mutexName)
+    private SyncInstanceGuard(FileStream lockStream, string lockPath)
     {
-        _mutex     = mutex;
-        _mutexName = mutexName;
-        _owned     = true;
+        _lockStream = lockStream;
+        _lockPath   = lockPath;
     }
 
-    /// <summary>Nombre completo del mutex adquirido (para diagnóstico).</summary>
-    public string MutexName => _mutexName;
+    /// <summary>Ruta absoluta del archivo de lock adquirido (para diagnóstico).</summary>
+    public string LockPath => _lockPath;
 
     /// <summary>
-    /// Devuelve el nombre canónico del Mutex para el sourceId dado.
+    /// Devuelve la ruta canónica del archivo de lock para el <paramref name="sourceId"/> dado.
+    /// El directorio de locks es <c>SyncPaths.GetConfigDirectory()\locks</c>.
+    /// Normalmente: <c>C:\ProgramData\RenderByte\Sync\locks\&lt;safe-source-id&gt;.lock</c>
     /// </summary>
-    public static string GetMutexName(string sourceId)
+    public static string GetLockPath(string sourceId)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceId);
-        
-        // Sanitizar sourceId para nombre válido de kernel object (solo alfanuméricos y guiones)
+
+        // Sanitizar sourceId para nombre de archivo válido (solo alfanuméricos y guiones)
         var safeName = new string(sourceId.Select(c =>
             char.IsLetterOrDigit(c) || c == '-' ? c : '_').ToArray());
 
-        if (OperatingSystem.IsWindows())
-        {
-            return $@"Global\RenderByteSync-{safeName}";
-        }
-        
-        return $@"Local\RenderByteSync-{safeName}";
+        var locksDir = Path.Combine(SyncPaths.GetConfigDirectory(), "locks");
+        return Path.Combine(locksDir, $"{safeName}.lock");
     }
-
-    internal static Action? TestHook_BeforeCreate;
-    internal static Action? TestHook_CreateThrow;
 
     /// <summary>
     /// Intenta adquirir la instancia única para el <paramref name="sourceId"/> dado.
     /// </summary>
+    /// <exception cref="SyncAlreadyRunningException">
+    /// Otro proceso ya posee el lock exclusivo del archivo.
+    /// </exception>
+    /// <exception cref="SyncPermissionException">
+    /// No hay permisos suficientes para crear el directorio o abrir el archivo de lock.
+    /// </exception>
+    /// <exception cref="IOException">
+    /// Error de I/O no relacionado con concurrencia (disco lleno, ruta inválida, etc.).
+    /// </exception>
     public static SyncInstanceGuard AcquireOrThrow(string sourceId)
     {
-        var mutexName = GetMutexName(sourceId);
-        Mutex mutex = null!;
+        var lockPath = GetLockPath(sourceId);
+        var locksDir = Path.GetDirectoryName(lockPath)!;
 
         try
         {
-            if (OperatingSystem.IsWindows())
-            {
-                int attempts = 0;
-                const int MaxAttempts = 3;
-
-                while (attempts < MaxAttempts)
-                {
-                    attempts++;
-                    
-                    try
-                    {
-                        if (MutexAcl.TryOpenExisting(mutexName, MutexRights.Synchronize | MutexRights.Modify, out var existingMutex))
-                        {
-                            mutex = existingMutex!;
-                            break;
-                        }
-                    }
-                    catch (UnauthorizedAccessException)
-                    {
-                        // Genuine permission denial trying to OPEN the existing mutex.
-                        throw new SyncPermissionException(
-                            $"Cannot access the global RenderByte Sync instance guard. Run as Administrator or repair permissions.");
-                    }
-
-                    try
-                    {
-                        TestHook_BeforeCreate?.Invoke();
-
-                        var security = new MutexSecurity();
-                        
-                        // Allow LocalSystem
-                        security.AddAccessRule(new MutexAccessRule(
-                            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
-                            MutexRights.Synchronize | MutexRights.Modify,
-                            AccessControlType.Allow));
-                        
-                        // Allow Built-in Administrators
-                        security.AddAccessRule(new MutexAccessRule(
-                            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
-                            MutexRights.Synchronize | MutexRights.Modify,
-                            AccessControlType.Allow));
-                        
-                        // Allow Authenticated Users (so non-elevated interactive runs can wait on it and detect it's locked)
-                        security.AddAccessRule(new MutexAccessRule(
-                            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
-                            MutexRights.Synchronize | MutexRights.Modify,
-                            AccessControlType.Allow));
-
-                        TestHook_CreateThrow?.Invoke();
-                        mutex = MutexAcl.Create(false, mutexName, out _, security);
-                        break;
-                    }
-                    catch (UnauthorizedAccessException)
-                    {
-                        // Race condition: another process created the mutex between our TryOpenExisting 
-                        // and Create. We lack permission to create it or open it via Create's default FullControl request.
-                        if (attempts >= MaxAttempts)
-                        {
-                            throw new SyncPermissionException(
-                                $"Failed to acquire instance guard due to a persistent race condition or permission error after {MaxAttempts} attempts.");
-                        }
-                        Thread.Sleep(10);
-                    }
-                }
-            }
-            else
-            {
-                mutex = new Mutex(false, mutexName);
-            }
+            Directory.CreateDirectory(locksDir);
         }
         catch (UnauthorizedAccessException)
         {
             throw new SyncPermissionException(
-                $"Cannot access the global RenderByte Sync instance guard. Run as Administrator or repair permissions.");
+                $"Cannot create lock directory '{locksDir}'. Run as Administrator or repair permissions.");
+        }
+        catch (IOException ex)
+        {
+            throw new SyncPermissionException(
+                $"Cannot create lock directory '{locksDir}': {ex.Message}");
         }
 
-        bool acquired;
+        FileStream stream;
         try
         {
-            acquired = mutex.WaitOne(TimeSpan.Zero);
+            stream = new FileStream(
+                lockPath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
         }
-        catch (AbandonedMutexException)
+        catch (IOException ex) when (IsSharingViolation(ex))
         {
-            // Abandoned mutex means the previous owner crashed without releasing it.
-            // Ownership is automatically transferred to us.
-            Console.WriteLine("[INSTANCE GUARD] Recovered abandoned mutex.");
-            acquired = true;
+            throw new SyncAlreadyRunningException(
+                "RenderByte Sync is already running for this source.");
         }
-        catch
+        catch (UnauthorizedAccessException)
         {
-            mutex.Dispose();
-            throw;
+            throw new SyncPermissionException(
+                "Cannot access the RenderByte Sync instance lock. Run as Administrator or repair permissions.");
         }
 
-        if (!acquired)
+        return new SyncInstanceGuard(stream, lockPath);
+    }
+
+    /// <summary>
+    /// Determina si una <see cref="IOException"/> corresponde a una violación de sharing
+    /// (el archivo está siendo usado en exclusiva por otro proceso).
+    /// </summary>
+    private static bool IsSharingViolation(IOException ex)
+    {
+        if (OperatingSystem.IsWindows())
         {
-            mutex.Dispose();
-            throw new SyncAlreadyRunningException($"RenderByte Sync is already running for this source.");
+            // Win32 ERROR_SHARING_VIOLATION = 32  → HResult 0x80070020
+            // Win32 ERROR_LOCK_VIOLATION    = 33  → HResult 0x80070021
+            const int SharingViolation = unchecked((int)0x80070020);
+            const int LockViolation    = unchecked((int)0x80070021);
+            return ex.HResult == SharingViolation || ex.HResult == LockViolation;
         }
 
-        return new SyncInstanceGuard(mutex, mutexName);
+        // En plataformas no-Windows, cualquier IOException al abrir con FileShare.None
+        // indica que el archivo está bloqueado por otro proceso.
+        // UnauthorizedAccessException (permisos) es capturada por separado.
+        return true;
     }
 
     /// <inheritdoc/>
     public void Dispose()
     {
-        if (_owned)
-        {
-            try   { _mutex.ReleaseMutex(); }
-            catch { /* Si el mutex fue abandonado, ignorar */ }
-            _owned = false;
-        }
-        _mutex.Dispose();
+        _lockStream.Dispose();
     }
 }

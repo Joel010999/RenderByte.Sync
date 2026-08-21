@@ -463,8 +463,13 @@ public class UnifiedRunTests : IDisposable
 
         var stockMock = new Mock<IStockReader>();
 
+        // ProductIntervalSeconds=5 (fake) so that the second product capture triggers
+        // on the next backoff cycle (5s fake-time advance), making the test
+        // deterministic regardless of system load.
+        var productTestOptions = _options with { ProductIntervalSeconds = 5 };
+
         using var cts = new CancellationTokenSource();
-        var runTask = ContinuousRunAgent.RunAsync(_options, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
+        var runTask = ContinuousRunAgent.RunAsync(productTestOptions, readerMock.Object, cts.Token, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new Moq.Mock<RenderByte.Sync.Agent.Services.ISyncStatusWriter>().Object, mockHttp, productMock.Object, stockMock.Object);
         
         await Task.Delay(200);
         cts.Cancel();

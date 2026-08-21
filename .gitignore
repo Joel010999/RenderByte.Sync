@@ -29,3 +29,8 @@ artifacts/
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Local configuration and secrets
+config.json
+secrets.json
+*.secrets.*

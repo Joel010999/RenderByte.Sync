@@ -6,6 +6,7 @@ using RenderByte.Sync.Core.Alegon;
 using RenderByte.Sync.Infrastructure.Alegon;
 using RenderByte.Sync.Persistence;
 using RenderByte.Sync.Agent.Services;
+using RenderByte.Sync.Agent.Configuration;
 
 namespace RenderByte.Sync.Agent;
 
@@ -15,7 +16,7 @@ public static class ContinuousRunAgent
     public static Func<DateTimeOffset> GetUtcNow { get; set; } = () => DateTimeOffset.UtcNow;
 
     public static async Task<int> RunAsync(
-        SyncAgentOptions options, 
+        ResolvedSyncOptions options, 
         IAlegonReader reader, 
         CancellationToken ct, 
         HttpMessageHandler? httpHandler = null,

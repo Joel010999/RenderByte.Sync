@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 using RenderByte.Sync.Agent;
+using RenderByte.Sync.Agent.Configuration;
 using RenderByte.Sync.Core.Alegon;
 using System.Collections.Generic;
 using RenderByte.Sync.Core.Alegon.Models;
@@ -14,12 +15,12 @@ using System.IO;
 
 namespace RenderByte.Sync.Tests;
 
-[Collection("Sequential")]
+[Collection("EnvVars")]
 public class UnifiedRunTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly string _sourceId;
-    private readonly SyncAgentOptions _options;
+    private readonly ResolvedSyncOptions _options;
 
     public UnifiedRunTests()
     {
@@ -27,7 +28,7 @@ public class UnifiedRunTests : IDisposable
         Environment.SetEnvironmentVariable(SyncDbPath.EnvVar, _dbPath);
         _sourceId = Guid.NewGuid().ToString().ToLowerInvariant();
         
-        _options = new SyncAgentOptions(
+        _options = new ResolvedSyncOptions(
             AlegonConnectionString: "Server=.;Integrated Security=true",
             SourceId: _sourceId,
             ApiUrl: "http://localhost",
@@ -159,7 +160,7 @@ public class UnifiedRunTests : IDisposable
     [Fact]
     public void UnifiedRun_IntervalsConfigurable()
     {
-        var options = new SyncAgentOptions(
+        var options = new ResolvedSyncOptions(
             AlegonConnectionString: "A",
             SourceId: "B",
             ApiUrl: "C",

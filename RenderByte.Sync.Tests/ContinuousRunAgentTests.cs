@@ -5,6 +5,7 @@ using System.Text.Json;
 using Moq;
 using Xunit;
 using RenderByte.Sync.Agent;
+using RenderByte.Sync.Agent.Configuration;
 using RenderByte.Sync.Contracts;
 using RenderByte.Sync.Core.Alegon;
 using RenderByte.Sync.Core.Alegon.Models;
@@ -12,12 +13,12 @@ using RenderByte.Sync.Persistence;
 
 namespace RenderByte.Sync.Tests;
 
-[Collection("Sequential")]
+[Collection("EnvVars")]
 public class ContinuousRunAgentTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly string _sourceId;
-    private readonly SyncAgentOptions _options;
+    private readonly ResolvedSyncOptions _options;
 
     public ContinuousRunAgentTests()
     {
@@ -25,7 +26,7 @@ public class ContinuousRunAgentTests : IDisposable
         Environment.SetEnvironmentVariable(SyncDbPath.EnvVar, _dbPath);
         _sourceId = Guid.NewGuid().ToString().ToLowerInvariant();
         
-        _options = new SyncAgentOptions(
+        _options = new ResolvedSyncOptions(
             AlegonConnectionString: "Server=.;Integrated Security=true",
             SourceId: _sourceId,
             ApiUrl: "http://localhost",

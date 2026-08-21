@@ -26,4 +26,8 @@
     <ProjectReference Include="..\RenderByte.Sync.Contracts\RenderByte.Sync.Contracts.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

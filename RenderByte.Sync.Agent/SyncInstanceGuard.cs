@@ -55,20 +55,28 @@ public sealed class SyncInstanceGuard : IDisposable
         return $@"Local\RenderByteSync-{safeName}";
     }
 
+    public static Action? TestHook_BeforeCreate;
+    public static Action? TestHook_CreateThrow;
+
     /// <summary>
     /// Intenta adquirir la instancia única para el <paramref name="sourceId"/> dado.
     /// </summary>
     public static SyncInstanceGuard AcquireOrThrow(string sourceId)
     {
         var mutexName = GetMutexName(sourceId);
-        Mutex mutex;
+        Mutex mutex = null!;
 
         try
         {
             if (OperatingSystem.IsWindows())
             {
-                while (true)
+                int attempts = 0;
+                const int MaxAttempts = 3;
+
+                while (attempts < MaxAttempts)
                 {
+                    attempts++;
+                    
                     try
                     {
                         if (MutexAcl.TryOpenExisting(mutexName, MutexRights.Synchronize | MutexRights.Modify, out var existingMutex))
@@ -76,6 +84,17 @@ public sealed class SyncInstanceGuard : IDisposable
                             mutex = existingMutex!;
                             break;
                         }
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        // Genuine permission denial trying to OPEN the existing mutex.
+                        throw new SyncPermissionException(
+                            $"Cannot access the global RenderByte Sync instance guard. Run as Administrator or repair permissions.");
+                    }
+
+                    try
+                    {
+                        TestHook_BeforeCreate?.Invoke();
 
                         var security = new MutexSecurity();
                         
@@ -97,22 +116,19 @@ public sealed class SyncInstanceGuard : IDisposable
                             MutexRights.Synchronize | MutexRights.Modify,
                             AccessControlType.Allow));
 
+                        TestHook_CreateThrow?.Invoke();
                         mutex = MutexAcl.Create(false, mutexName, out _, security);
                         break;
                     }
                     catch (UnauthorizedAccessException)
                     {
                         // Race condition: another process created the mutex between our TryOpenExisting 
-                        // and Create. If we just don't have permission to create it (or to open the now-existing one 
-                        // with Create's default FullControl), TryOpenExisting will either succeed (if we have 
-                        // Synchronize | Modify) or throw its own UnauthorizedAccessException on the next loop 
-                        // (which is then correctly surfaced below).
-                        
-                        // If it's a genuine permission issue that persists, TryOpenExisting will throw,
-                        // breaking the loop and bubbling out to the outer catch.
-                        
-                        // Wait a tiny bit just to avoid tight spinning, though usually TryOpenExisting 
-                        // will immediately succeed or throw.
+                        // and Create. We lack permission to create it or open it via Create's default FullControl request.
+                        if (attempts >= MaxAttempts)
+                        {
+                            throw new SyncPermissionException(
+                                $"Failed to acquire instance guard due to a persistent race condition or permission error after {MaxAttempts} attempts.");
+                        }
                         Thread.Sleep(10);
                     }
                 }

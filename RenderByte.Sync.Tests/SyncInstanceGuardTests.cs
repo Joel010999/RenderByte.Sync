@@ -1,6 +1,9 @@
 using System;
 using System.Diagnostics;
 using System.Threading;
+using System.Threading.Tasks;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using RenderByte.Sync.Agent;
 using Xunit;
 
@@ -170,5 +173,138 @@ public class SyncInstanceGuardTests
     {
         var ex = new SyncPermissionException("permission");
         Assert.Equal("permission", ex.Message);
+    }
+
+    [Fact]
+    public void InstanceGuard_PersistentUnauthorized_ThrowsSyncPermissionException()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        if (!CanCreateGlobalMutex()) return;
+
+        var sourceId = "test-persist-unauth";
+        var name = SyncInstanceGuard.GetMutexName(sourceId);
+
+        var security = new MutexSecurity();
+        security.AddAccessRule(new MutexAccessRule(
+            WindowsIdentity.GetCurrent().User!,
+            MutexRights.Synchronize | MutexRights.Modify,
+            AccessControlType.Deny));
+
+        using var m = MutexAcl.Create(false, name, out _, security);
+
+        var ex = Assert.Throws<SyncPermissionException>(() =>
+        {
+            SyncInstanceGuard.AcquireOrThrow(sourceId);
+        });
+
+        Assert.Contains("Cannot access", ex.Message);
+    }
+
+    [Fact]
+    public async Task InstanceGuard_PersistentUnauthorized_DoesNotLoopForever()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        if (!CanCreateGlobalMutex()) return;
+
+        var sourceId = "test-no-loop";
+        var name = SyncInstanceGuard.GetMutexName(sourceId);
+
+        var security = new MutexSecurity();
+        security.AddAccessRule(new MutexAccessRule(
+            WindowsIdentity.GetCurrent().User!,
+            MutexRights.Synchronize | MutexRights.Modify,
+            AccessControlType.Deny));
+
+        using var m = MutexAcl.Create(false, name, out _, security);
+
+        var task = Task.Run(() =>
+        {
+            Assert.Throws<SyncPermissionException>(() => SyncInstanceGuard.AcquireOrThrow(sourceId));
+        });
+
+        // Fail if it takes longer than 2 seconds, which implies an infinite loop
+        var completedTask = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.True(completedTask == task, "Test timed out, possibly due to infinite loop.");
+    }
+
+    [Fact]
+    public void InstanceGuard_CreateRace_ThenOpenExisting_Succeeds()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        if (!CanCreateGlobalMutex()) return;
+
+        var sourceId = "test-race-succeeds";
+        var name = SyncInstanceGuard.GetMutexName(sourceId);
+
+        Mutex? backgroundMutex = null;
+
+        // TryOpenExisting returns false, then hook creates mutex, then MutexAcl.Create throws
+        SyncInstanceGuard.TestHook_BeforeCreate = () =>
+        {
+            if (backgroundMutex == null)
+            {
+                var security = new MutexSecurity();
+                security.AddAccessRule(new MutexAccessRule(
+                    WindowsIdentity.GetCurrent().User!,
+                    MutexRights.Synchronize | MutexRights.Modify,
+                    AccessControlType.Allow));
+                backgroundMutex = MutexAcl.Create(false, name, out _, security);
+            }
+        };
+
+        // Ensure Create throws UnauthorizedAccessException to simulate lacking FullControl
+        SyncInstanceGuard.TestHook_CreateThrow = () =>
+        {
+            throw new UnauthorizedAccessException("Simulated race Create failure");
+        };
+
+        try
+        {
+            // First loop: TryOpenExisting fails, BeforeCreate creates it, Create throws.
+            // Second loop: TryOpenExisting succeeds!
+            using var guard = SyncInstanceGuard.AcquireOrThrow(sourceId);
+            Assert.NotNull(guard);
+        }
+        finally
+        {
+            SyncInstanceGuard.TestHook_BeforeCreate = null;
+            SyncInstanceGuard.TestHook_CreateThrow = null;
+            backgroundMutex?.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task InstanceGuard_CreateRace_RetryIsBounded()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        if (!CanCreateGlobalMutex()) return;
+
+        var sourceId = "test-race-bounded";
+        
+        // Always throw UnauthorizedAccessException in Create to simulate persistent race failure
+        SyncInstanceGuard.TestHook_CreateThrow = () =>
+        {
+            throw new UnauthorizedAccessException("Simulated race Create failure");
+        };
+
+        try
+        {
+            var task = Task.Run(() =>
+            {
+                var ex = Assert.Throws<SyncPermissionException>(() =>
+                {
+                    SyncInstanceGuard.AcquireOrThrow(sourceId);
+                });
+                Assert.Contains("Failed to acquire instance guard due to a persistent race condition", ex.Message);
+            });
+
+            // Fail if it takes longer than 2 seconds (infinite loop)
+            var completedTask = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(2)));
+            Assert.True(completedTask == task, "Test timed out, possibly due to infinite loop.");
+        }
+        finally
+        {
+            SyncInstanceGuard.TestHook_CreateThrow = null;
+        }
     }
 }

@@ -1,7 +1,9 @@
 using RenderByte.Sync.Agent;
 using RenderByte.Sync.Agent.Configuration;
 using RenderByte.Sync.Infrastructure.Alegon;
-
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using RenderByte.Sync.Agent.Logging;
 // ─── Punto de entrada único de RenderByte Sync ────────────────────────────────
 //
 // Comandos disponibles:
@@ -30,6 +32,49 @@ Console.CancelKeyPress += (_, e) =>
 };
 
 var command = args.Length > 0 ? args[0].ToLowerInvariant() : string.Empty;
+
+if (command == "--version" || command == "-v")
+{
+    Console.WriteLine("RenderByte Sync 0.12.0");
+    return 0;
+}
+
+if (command == "service")
+{
+    // Mode for SCM
+    var host = Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder(args)
+        .UseWindowsService(options =>
+        {
+            options.ServiceName = "RenderByteSync";
+        })
+        .ConfigureLogging(logging =>
+        {
+            logging.AddDailyRollingFile(Path.Combine(SyncPaths.GetConfigDirectory(), "Logs"));
+        })
+        .ConfigureServices((hostContext, services) =>
+        {
+            var protector = new WindowsDpapiSecretProtector();
+            var resolver = new SyncConfigurationResolver(protector);
+            var options = resolver.Resolve(); // Will crash service if config is fatal
+            var reader = new AlegonReader(options.AlegonConnectionString);
+
+            services.AddSingleton(options);
+            services.AddSingleton(reader);
+            services.AddHostedService<RenderByteSyncWorker>();
+        })
+        .Build();
+
+    await host.RunAsync();
+    return 0;
+}
+
+var svcManager = new RenderByte.Sync.Agent.Services.WindowsServiceManager();
+
+if (command == "service-install") return await ServiceInstallCommandAgent.RunAsync(svcManager, cts.Token);
+if (command == "service-uninstall") return await ServiceUninstallCommandAgent.RunAsync(svcManager, cts.Token);
+if (command == "service-start") return await ServiceStartCommandAgent.RunAsync(svcManager, cts.Token);
+if (command == "service-stop") return await ServiceStopCommandAgent.RunAsync(svcManager, cts.Token);
+if (command == "service-status") return await ServiceStatusCommandAgent.RunAsync(svcManager, cts.Token);
 
 if (command == "configure")
 {

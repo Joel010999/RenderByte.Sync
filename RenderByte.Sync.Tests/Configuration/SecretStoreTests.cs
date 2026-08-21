@@ -52,6 +52,10 @@ public class SecretStoreTests : IDisposable
         var content = File.ReadAllText(_tempSecrets);
         var deserialized = JsonSerializer.Deserialize<SyncSecrets>(content);
 
+        Assert.NotNull(deserialized);
+        Assert.NotNull(deserialized.SqlPassword);
+        Assert.NotNull(deserialized.ApiKey);
+
         Assert.Equal("ssapym", deserialized.SqlPassword);
         Assert.Equal("yekym", deserialized.ApiKey);
 

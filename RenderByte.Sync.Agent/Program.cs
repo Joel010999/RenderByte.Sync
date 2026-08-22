@@ -38,7 +38,7 @@ var command = args.Length > 0 ? args[0].ToLowerInvariant() : string.Empty;
 
 if (command == "--version" || command == "-v")
 {
-    Console.WriteLine("RenderByte Sync 0.12.6");
+    Console.WriteLine($"RenderByte Sync {SyncVersion.Current}");
     return 0;
 }
 

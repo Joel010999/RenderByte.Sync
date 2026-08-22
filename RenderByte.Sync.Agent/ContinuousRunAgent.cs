@@ -85,7 +85,7 @@ public static class ContinuousRunAgent
         }
 
         var status = new SyncStatus(
-            ServiceVersion: "0.12.0",
+            ServiceVersion: SyncVersion.Current,
             SourceId: options.SourceId,
             BranchId: branchId,
             StartedAtUtc: GetUtcNow().UtcDateTime,

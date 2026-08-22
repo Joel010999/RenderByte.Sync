@@ -37,11 +37,13 @@ public sealed class MovementBatchReader
     private readonly IAlegonReader _reader;
     private readonly int           _branchNumber;
     private readonly int           _batchSize;
+    private readonly bool          _salesOnly;
 
     /// <param name="reader">Lector de Alegon (solo lectura).</param>
     /// <param name="branchNumber">Depósito local (de sisparam).</param>
     /// <param name="batchSize">Cantidad máxima de filas por batch. Debe ser &gt; 0.</param>
-    public MovementBatchReader(IAlegonReader reader, int branchNumber, int batchSize)
+    /// <param name="salesOnly">Si es true, filtra solo ventas.</param>
+    public MovementBatchReader(IAlegonReader reader, int branchNumber, int batchSize, bool salesOnly = false)
     {
         ArgumentNullException.ThrowIfNull(reader);
         if (batchSize <= 0)
@@ -50,6 +52,7 @@ public sealed class MovementBatchReader
         _reader       = reader;
         _branchNumber = branchNumber;
         _batchSize    = batchSize;
+        _salesOnly    = salesOnly;
     }
 
     /// <summary>Número de depósito local configurado.</summary>
@@ -80,6 +83,7 @@ public sealed class MovementBatchReader
             _branchNumber,
             checkpoint,
             _batchSize,
+            _salesOnly,
             cancellationToken);
 
         if (movements.Count == 0)

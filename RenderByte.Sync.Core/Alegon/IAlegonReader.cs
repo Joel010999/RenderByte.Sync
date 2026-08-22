@@ -60,4 +60,11 @@ public interface IAlegonReader
         MovementCheckpoint checkpoint,
         int                limit,
         CancellationToken  cancellationToken = default);
+
+    Task<IReadOnlyList<AlegonMovement>> GetMovementsAfterAsync(
+        int                branchNumber,
+        MovementCheckpoint checkpoint,
+        int                limit,
+        bool               salesOnly,
+        CancellationToken  cancellationToken = default);
 }

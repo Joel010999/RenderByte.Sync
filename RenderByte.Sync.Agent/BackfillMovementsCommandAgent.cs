@@ -71,7 +71,7 @@ public static class BackfillMovementsCommandAgent
         }
 
         using var client = new HttpSyncClient(options.ApiUrl, options.ApiKey, httpHandler);
-        var batchReader = new MovementBatchReader(reader, branchId, options.ReadBatchSize);
+        var batchReader = new MovementBatchReader(reader, branchId, options.ReadBatchSize, salesOnly: true);
 
         int totalProcessed = 0;
         int totalAccepted = 0;

@@ -164,42 +164,32 @@ public sealed class MovementBatchReaderTests
         public StubAlegonReader(IEnumerable<AlegonMovement> movements) =>
             _all = movements.ToList();
 
-        public Task<IReadOnlyList<AlegonMovement>> GetMovementsAfterAsync(
-            int                branchNumber,
-            MovementCheckpoint checkpoint,
-            int                limit,
-            CancellationToken  cancellationToken = default)
+        public Task<IReadOnlyList<AlegonMovement>> GetMovementsAfterAsync(int branchNumber, MovementCheckpoint checkpoint, int limit, CancellationToken cancellationToken = default)
         {
-            var result = _all
-                .Where(m => m.FechaDeposito.HasValue)
-                .Where(m => IsAfterCheckpoint(m, checkpoint))
-                .OrderBy(m  => m.FechaDeposito)
-                .ThenBy(m   => m.ClaveU,  StringComparer.Ordinal)
-                .ThenBy(m   => m.Item)
-                .Take(limit)
-                .ToList();
+            return GetMovementsAfterAsync(branchNumber, checkpoint, limit, false, cancellationToken);
+        }
 
+        public Task<IReadOnlyList<AlegonMovement>> GetMovementsAfterAsync(int branchNumber, MovementCheckpoint checkpoint, int limit, bool salesOnly, CancellationToken cancellationToken = default)
+        {
+            var result = _all.Where(m => ComparePosition(m, checkpoint) > 0)
+                                  .OrderBy(m => m.FechaDeposito ?? DateTime.MinValue)
+                                  .ThenBy(m => m.ClaveU, StringComparer.Ordinal)
+                                  .ThenBy(m => m.Item)
+                                  .Take(limit)
+                                  .ToList();
             return Task.FromResult<IReadOnlyList<AlegonMovement>>(result);
         }
 
-        /// <summary>
-        /// Replica en C# la lógica OR anidada del cursor SQL para verificar consistencia.
-        /// fedepo > last  OR  (fedepo = last AND (CLAVEU > last OR (CLAVEU = last AND item > last)))
-        /// </summary>
-        private static bool IsAfterCheckpoint(AlegonMovement m, MovementCheckpoint cp)
+        private static int ComparePosition(AlegonMovement m, MovementCheckpoint cp)
         {
             var fedepo = m.FechaDeposito!.Value;
+            if (fedepo > cp.Fedepo) return 1;
+            if (fedepo < cp.Fedepo) return -1;
 
-            if (fedepo > cp.Fedepo) return true;
-            if (fedepo < cp.Fedepo) return false;
-
-            // fedepo == cp.Fedepo
             var claveComp = string.Compare(m.ClaveU, cp.ClaveU, StringComparison.Ordinal);
-            if (claveComp > 0) return true;
-            if (claveComp < 0) return false;
+            if (claveComp != 0) return claveComp;
 
-            // CLAVEU == cp.ClaveU
-            return m.Item > cp.Item;
+            return m.Item.CompareTo(cp.Item);
         }
 
         // Métodos no utilizados en estos tests
@@ -220,11 +210,15 @@ public sealed class MovementBatchReaderTests
 
         public RawStubAlegonReader(params AlegonMovement[] raw) => _raw = raw;
 
-        public Task<IReadOnlyList<AlegonMovement>> GetMovementsAfterAsync(
-            int branchNumber, MovementCheckpoint checkpoint, int limit, CancellationToken ct = default) =>
-            Task.FromResult(_raw);
+        public Task<IReadOnlyList<AlegonMovement>> GetMovementsAfterAsync(int branchNumber, MovementCheckpoint checkpoint, int limit, CancellationToken cancellationToken = default)
+        {
+            return GetMovementsAfterAsync(branchNumber, checkpoint, limit, false, cancellationToken);
+        }
 
-        public Task<AlegonHealthCheck>            GetHealthCheckAsync(CancellationToken ct = default)                       => throw new NotImplementedException();
+        public Task<IReadOnlyList<AlegonMovement>> GetMovementsAfterAsync(int branchNumber, MovementCheckpoint checkpoint, int limit, bool salesOnly, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<AlegonMovement>>(_raw);
+        } public Task<AlegonHealthCheck>            GetHealthCheckAsync(CancellationToken ct = default)                       => throw new NotImplementedException();
         public Task<int>                          GetBranchNumberAsync(CancellationToken ct = default)                      => throw new NotImplementedException();
         public Task<IReadOnlyList<AlegonProduct>> GetProductsAsync(CancellationToken ct = default)                          => throw new NotImplementedException();
         public Task<IReadOnlyList<AlegonStock>>   GetCurrentStockAsync(int b, CancellationToken ct = default)               => throw new NotImplementedException();

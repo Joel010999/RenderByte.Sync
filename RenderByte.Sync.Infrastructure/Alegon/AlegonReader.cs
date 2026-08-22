@@ -145,6 +145,55 @@ public sealed class AlegonReader : IAlegonReader
             item    ASC;
         """;
 
+    // ─── Query de lectura incremental con filtro de VENTAS ────────────────────
+    private const string SqlSalesMovementsAfterCheckpoint =
+        """
+        SELECT TOP (@limit)
+            depo,
+            tipomov,
+            fecha,
+            codcom,
+            ptovta,
+            numero,
+            proveedor,
+            idarti,
+            bulto,
+            local,
+            item,
+            fedepo,
+            oferta,
+            cantidad,
+            saldo,
+            costo,
+            precio,
+            CLAVEU,
+            piezas
+        FROM dbo.movistockdt
+        WHERE depo = @branchNumber
+          AND codcom IN (
+              SELECT DISTINCT codcom
+              FROM dbo.comppalprf
+              WHERE tipo = 'V'
+          )
+          AND (
+                fedepo > @lastFedepo
+                OR (
+                    fedepo = @lastFedepo
+                    AND (
+                        CLAVEU > @lastClaveU
+                        OR (
+                            CLAVEU = @lastClaveU
+                            AND item > @lastItem
+                        )
+                    )
+                )
+              )
+        ORDER BY
+            fedepo ASC,
+            CLAVEU ASC,
+            item    ASC;
+        """;
+
     // ─── Estado ───────────────────────────────────────────────────────────────
 
     private readonly string _connectionString;
@@ -253,10 +302,20 @@ public sealed class AlegonReader : IAlegonReader
         return await QueryLatestMovementDateAsync(connection, branchNumber, cancellationToken);
     }
 
+    public Task<IReadOnlyList<AlegonMovement>> GetMovementsAfterAsync(
+        int                branchNumber,
+        MovementCheckpoint checkpoint,
+        int                limit,
+        CancellationToken  cancellationToken = default)
+    {
+        return GetMovementsAfterAsync(branchNumber, checkpoint, limit, salesOnly: false, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<AlegonMovement>> GetMovementsAfterAsync(
         int                branchNumber,
         MovementCheckpoint checkpoint,
         int                limit,
+        bool               salesOnly,
         CancellationToken  cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
@@ -266,7 +325,7 @@ public sealed class AlegonReader : IAlegonReader
         await using var connection = new SqlConnection(BuildConnectionString(AlegonDatabase));
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = CreateCursorCommand(connection, checkpoint, branchNumber, limit);
+        await using var command = CreateCursorCommand(connection, checkpoint, branchNumber, limit, salesOnly);
         await using var reader  = await command.ExecuteReaderAsync(cancellationToken);
 
         var results = new List<AlegonMovement>();
@@ -329,9 +388,11 @@ public sealed class AlegonReader : IAlegonReader
         SqlConnection      connection,
         MovementCheckpoint checkpoint,
         int                branchNumber,
-        int                limit)
+        int                limit,
+        bool               salesOnly)
     {
-        var cmd = new SqlCommand(SqlMovementsAfterCheckpoint, connection)
+        var sql = salesOnly ? SqlSalesMovementsAfterCheckpoint : SqlMovementsAfterCheckpoint;
+        var cmd = new SqlCommand(sql, connection)
         {
             CommandType    = System.Data.CommandType.Text,
             CommandTimeout = 30

@@ -87,7 +87,7 @@ public class BackfillMovementsCommandAgentTests : IDisposable
         );
     }
 
-    [Fact(Skip="Test mock errors")]
+    [Fact]
     public async Task Backfill_StartsAtRequestedDate_AndUsesModeBackfill()
     {
         var readerMock = new Mock<IAlegonReader>();
@@ -96,8 +96,8 @@ public class BackfillMovementsCommandAgentTests : IDisposable
         bool captured = false;
         MovementCheckpoint? initialCheckpoint = null;
 
-        readerMock.Setup(r => r.GetMovementsAfterAsync(It.IsAny<int>(), It.IsAny<MovementCheckpoint>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((int branch, MovementCheckpoint cp, int limit, CancellationToken ct) =>
+        readerMock.Setup(r => r.GetMovementsAfterAsync(It.IsAny<int>(), It.IsAny<MovementCheckpoint>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((int branch, MovementCheckpoint cp, int limit, bool sales, CancellationToken ct) =>
             {
                 if (!captured)
                 {
@@ -193,8 +193,8 @@ public class BackfillMovementsCommandAgentTests : IDisposable
         var readerMock = new Mock<IAlegonReader>();
         readerMock.Setup(r => r.GetBranchNumberAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
         
-        readerMock.Setup(r => r.GetMovementsAfterAsync(It.IsAny<int>(), It.IsAny<MovementCheckpoint>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((int branch, MovementCheckpoint cp, int limit, CancellationToken ct) =>
+        readerMock.Setup(r => r.GetMovementsAfterAsync(It.IsAny<int>(), It.IsAny<MovementCheckpoint>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((int branch, MovementCheckpoint cp, int limit, bool sales, CancellationToken ct) =>
             {
                 return new List<AlegonMovement> { MakeMovement("001", 1) };
             });
